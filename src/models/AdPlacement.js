@@ -13,7 +13,7 @@ const adPlacementSchema = new mongoose.Schema({
         },
         content: { type: String }, // URL for image/video
         embedCode: { type: String }, // HTML/iframe/script for embed type
-        targetUrl: { type: String, required: true }, // Destination URL for this content
+        targetUrl: { type: String }, // Destination URL for this content (optional for embed ads)
         priority: { type: Number, default: 5, min: 1, max: 10 }, // Priority để rotate content
         views: { type: Number, default: 0 },
         clicks: { type: Number, default: 0 }
