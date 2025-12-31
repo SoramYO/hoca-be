@@ -14,8 +14,10 @@ require('./models/SystemConfig');
 require('./models/Message');
 
 const buildApp = async () => {
-  const app = fastify({
-    logger: {
+  // Configure logger based on environment
+  const loggerConfig = process.env.NODE_ENV === 'production'
+    ? true // Use default Pino logger in production
+    : {
       transport: {
         target: 'pino-pretty',
         options: {
@@ -23,7 +25,10 @@ const buildApp = async () => {
           ignore: 'pid,hostname'
         }
       }
-    }
+    };
+
+  const app = fastify({
+    logger: loggerConfig
   });
 
   // Register Middleware
