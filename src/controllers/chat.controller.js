@@ -9,8 +9,9 @@ const sendMessage = async (req, reply) => {
 
         // Check if user is Premium
         const user = await User.findById(userId);
+        console.log(user);
         if (!user.isPremium) {
-            return reply.code(403).send({ message: 'Tính năng chat chỉ dành cho người dùng Pro. Nâng cấp ngay!' });
+            return reply.code(403).send({ message: 'Tính năng chat chỉ dành cho người dùng Pro. Nâng cấp ngay gói Pro!' });
         }
 
         if (!content || content.trim().length === 0) {

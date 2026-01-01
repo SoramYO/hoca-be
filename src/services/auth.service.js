@@ -7,8 +7,8 @@ const client = new OAuth2Client(GOOGLE_CLIENT_ID);
 const crypto = require('crypto');
 const emailService = require('./email.service');
 
-const signToken = (id, role) => {
-  return jwt.sign({ id, role }, JWT_SECRET, { expiresIn: '7d' });
+const signToken = (id, role, isPremium) => {
+  return jwt.sign({ id, role, isPremium }, JWT_SECRET, { expiresIn: '7d' });
 };
 
 const registerUser = async (userData) => {
@@ -27,7 +27,7 @@ const registerUser = async (userData) => {
     password
   });
 
-  const token = signToken(user._id, user.role);
+  const token = signToken(user._id, user.role, user.isPremium);
 
   return { user, token };
 };
@@ -45,8 +45,8 @@ const loginUser = async ({ email, password }) => {
     throw new Error('Invalid credentials');
   }
 
-  const token = signToken(user._id, user.role);
-  
+  const token = signToken(user._id, user.role, user.isPremium);
+
   // Return user without password
   const userObj = user.toObject();
   delete userObj.password;
@@ -142,7 +142,7 @@ const resetPassword = async (token, newPassword) => {
 
   await user.save();
 
-  const newToken = signToken(user._id, user.role);
+  const newToken = signToken(user._id, user.role, user.isPremium);
   return { token: newToken, user };
 };
 
@@ -164,22 +164,22 @@ const googleLogin = async (token) => {
     console.log('[Google Auth] ID Token verify failed:', error.message);
     // If fails, try as Access Token
     try {
-        // Create a new client instance to avoid state pollution/race conditions
-        const requestClient = new OAuth2Client(GOOGLE_CLIENT_ID);
-        requestClient.setCredentials({ access_token: token });
-        
-        const response = await requestClient.request({
-             url: 'https://www.googleapis.com/oauth2/v3/userinfo'
-        });
-        const data = response.data;
-        googleId = data.sub;
-        email = data.email;
-        name = data.name;
-        picture = data.picture;
-        
+      // Create a new client instance to avoid state pollution/race conditions
+      const requestClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+      requestClient.setCredentials({ access_token: token });
+
+      const response = await requestClient.request({
+        url: 'https://www.googleapis.com/oauth2/v3/userinfo'
+      });
+      const data = response.data;
+      googleId = data.sub;
+      email = data.email;
+      name = data.name;
+      picture = data.picture;
+
     } catch (err) {
-        console.error('[Google Auth] Access Token verify failed:', err);
-        throw new Error('Invalid Google Token: ' + err.message);
+      console.error('[Google Auth] Access Token verify failed:', err);
+      throw new Error('Invalid Google Token: ' + err.message);
     }
   }
 
@@ -201,11 +201,11 @@ const googleLogin = async (token) => {
       googleId,
       avatar: picture,
       // Random password for google users
-      password: crypto.randomBytes(16).toString('hex') 
+      password: crypto.randomBytes(16).toString('hex')
     });
   }
 
-  const tokenJWT = signToken(user._id, user.role);
+  const tokenJWT = signToken(user._id, user.role, user.isPremium);
   return { user, token: tokenJWT };
 };
 

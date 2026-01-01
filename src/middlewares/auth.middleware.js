@@ -7,7 +7,6 @@ const protect = async (req, reply) => {
 };
 
 const admin = async (req, reply) => {
-    console.log("123123123",req.user)
   if (req.user && req.user.role === 'ADMIN') {
     // Authorized
   } else {

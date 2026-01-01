@@ -21,18 +21,6 @@ const userSchema = new mongoose.Schema({
   isPremium: { type: Boolean, default: false },
   premiumExpiry: { type: Date },
 
-  // Virtual Background (Premium Feature)
-  virtualBackground: {
-    enabled: { type: Boolean, default: false },
-    mode: {
-      type: String,
-      enum: ['none', 'blur', 'image', 'video'],
-      default: 'none'
-    },
-    imageUrl: { type: String }, // For static image backgrounds
-    blurAmount: { type: Number, default: 10, min: 0, max: 20 } // Blur intensity
-  },
-
   // Study Stats
   dailyStudyGoal: { type: Number, default: 120 }, // minutes
   todayStudyMinutes: { type: Number, default: 0 },

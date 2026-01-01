@@ -43,7 +43,13 @@ const updateStudyTime = async (req, reply) => {
       return reply.code(400).send({ message: 'Invalid minutes' });
     }
     const user = await userService.trackStudyTime(req.user.id, minutes);
-    reply.send({ message: 'Study time updated', todayStudyMinutes: user.todayStudyMinutes, totalStudyMinutes: user.totalStudyMinutes });
+    reply.send({
+      message: 'Study time updated',
+      todayStudyMinutes: user.todayStudyMinutes,
+      totalStudyMinutes: user.totalStudyMinutes,
+      currentStreak: user.currentStreak,
+      longestStreak: user.longestStreak
+    });
   } catch (error) {
     reply.code(400).send({ message: error.message });
   }

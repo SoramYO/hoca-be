@@ -1,8 +1,8 @@
 const fastify = require('fastify');
 const cors = require('@fastify/cors');
 const jwt = require('@fastify/jwt');
+const multipart = require('@fastify/multipart');
 const { JWT_SECRET, CLIENT_URL } = require('./config/env');
-
 // Register Models
 require('./models/User');
 require('./models/Badge');
@@ -12,15 +12,16 @@ require('./models/Transaction');
 require('./models/Report');
 require('./models/SystemConfig');
 require('./models/Message');
-
+const logger = require('./middlewares/logger.middleware');
 const buildApp = async () => {
-  // Configure logger based on environment
-  const loggerConfig = true;
+  const app = fastify();
 
-  const app = fastify({
-    logger: loggerConfig
+  // Register Multipart for file uploads
+  await app.register(multipart, {
+    limits: {
+      fileSize: 5 * 1024 * 1024 // 5MB limit
+    }
   });
-
   // Register Middleware
   await app.register(cors, {
     origin: (origin, cb) => {
@@ -39,6 +40,8 @@ const buildApp = async () => {
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization']
   });
+
+  app.register(logger);
 
 
   await app.register(jwt, {
@@ -62,6 +65,7 @@ const buildApp = async () => {
   app.register(require('./routes/badge.routes'), { prefix: '/api/badges' });
   app.register(require('./routes/chat.routes'), { prefix: '/api/chat' });
   app.register(require('./routes/quote.routes'), { prefix: '/api/quotes' });
+  app.register(require('./routes/upload.routes'), { prefix: '/api/upload' });
 
 
   return app;

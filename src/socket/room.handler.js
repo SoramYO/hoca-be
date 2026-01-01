@@ -7,8 +7,8 @@ const roomTimers = {};
 
 const TIMER_MODES = {
   'POMODORO_25_5': { focus: 25, break: 5 },
-  'POMODORO_45_5': { focus: 45, break: 5 },
   'POMODORO_50_10': { focus: 50, break: 10 },
+  'POMODORO_90_15': { focus: 90, break: 15 },
   'COUNT_UP': { focus: 0, break: 0 } // handled differently
 };
 
@@ -81,10 +81,16 @@ const registerRoomHandlers = (io, socket) => {
         }
       });
 
-      // Sync Timer
+      // Sync Timer - if timer exists, sync it; if not, auto-start!
       if (roomTimers[roomId]) {
         const { status, startTime, duration, mode } = roomTimers[roomId];
         socket.emit('timer-sync', { status, startTime, duration, mode, serverTime: Date.now() });
+      } else {
+        // Auto-start timer for the room with default mode
+        const room = await Room.findById(roomId);
+        const mode = room?.timerMode || 'POMODORO_25_5';
+        runTimerPhase(roomId, 'FOCUS', mode);
+        console.log(`Auto-started timer for room ${roomId} with mode ${mode}`);
       }
 
       console.log(`User ${userId} joined room ${roomId}`);
@@ -161,6 +167,28 @@ const registerRoomHandlers = (io, socket) => {
     }
   });
 
+  // Change timer mode - syncs to all users in room
+  socket.on('timer-mode-change', ({ roomId, mode }) => {
+    // Validate mode
+    const validModes = ['POMODORO_25_5', 'POMODORO_50_10', 'POMODORO_90_15'];
+    if (!validModes.includes(mode)) {
+      mode = 'POMODORO_25_5';
+    }
+
+    console.log(`User ${socket.user.displayName} changed timer mode to ${mode} in room ${roomId}`);
+
+    // Restart timer with new mode (resets to FOCUS phase with new duration)
+    runTimerPhase(roomId, 'FOCUS', mode);
+
+    // Notify room
+    io.to(roomId).emit('chat-message', {
+      userId: 'system',
+      displayName: 'System',
+      message: `🔄 ${socket.user.displayName} đã đổi chế độ Pomodoro thành ${mode.replace('POMODORO_', '').replace('_', '/')}`,
+      timestamp: new Date().toISOString()
+    });
+  });
+
   socket.on('signal', ({ roomId, signal, to }) => {
     io.to(to).emit('signal', {
       signal,
@@ -176,7 +204,8 @@ const registerRoomHandlers = (io, socket) => {
   socket.on('chat-message', ({ roomId, message }) => {
     // Pro-only chat restriction
     if (!socket.user.isPremium && socket.user.role !== 'ADMIN') {
-      socket.emit('chat-error', { message: 'Tính năng chat chỉ dành cho người dùng Pro. Nâng cấp ngay!' });
+      console.log(socket.user);
+      socket.emit('chat-error', { message: 'Tính năng chat chỉ dành cho người dùng Pro. Nâng cấp ngay gói Pro!' });
       return;
     }
 
