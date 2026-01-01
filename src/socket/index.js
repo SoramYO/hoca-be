@@ -15,10 +15,18 @@ const setupSocket = (io) => {
     try {
       const decoded = jwt.verify(token, JWT_SECRET);
       // Fetch full user from DB
-      const user = await User.findById(decoded.id).select('displayName avatar role isPremium');
+      const user = await User.findById(decoded.id).select('displayName avatar role subscriptionTier subscriptionExpiry');
       if (!user) {
         console.error('[Socket Auth] User not found for id:', decoded.id);
         return next(new Error('User not found'));
+      }
+
+      // Calculate effective tier (check expiry for MONTHLY/YEARLY)
+      let effectiveTier = user.subscriptionTier || 'FREE';
+      if (effectiveTier !== 'FREE' && effectiveTier !== 'LIFETIME') {
+        if (user.subscriptionExpiry && new Date(user.subscriptionExpiry) < new Date()) {
+          effectiveTier = 'FREE';
+        }
       }
 
       socket.user = {
@@ -26,7 +34,9 @@ const setupSocket = (io) => {
         displayName: user.displayName,
         avatar: user.avatar,
         role: user.role,
-        isPremium: user.isPremium || false
+        subscriptionTier: effectiveTier,
+        // Backward compat: isPremium = true if tier is not FREE
+        isPremium: effectiveTier !== 'FREE'
       };
       next();
     } catch (err) {
@@ -36,13 +46,29 @@ const setupSocket = (io) => {
   });
 
   io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.user.id}`);
+    console.log(`User connected: ${socket.user.id} | Socket ID: ${socket.id}`);
+
+    // Send initial connection confirmation
+    socket.emit('connected', {
+      userId: socket.user.id,
+      socketId: socket.id,
+      timestamp: new Date()
+    });
 
     // Register handlers
     registerRoomHandlers(io, socket);
 
-    socket.on('disconnect', () => {
-      console.log('User disconnected');
+    // Handle manual ping from client
+    socket.on('ping', () => {
+      socket.emit('pong', { timestamp: Date.now() });
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log(`User disconnected: ${socket.user.id} | Reason: ${reason}`);
+    });
+
+    socket.on('error', (error) => {
+      console.error(`Socket error for user ${socket.user.id}:`, error);
     });
   });
 };

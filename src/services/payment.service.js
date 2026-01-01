@@ -1,11 +1,11 @@
 const crypto = require('crypto');
 const querystring = require('querystring');
 const moment = require('moment'); // You might need to install moment or use vanilla Date
-const { 
-  VNPAY_TMN_CODE, 
-  VNPAY_HASH_SECRET, 
-  VNPAY_URL, 
-  VNPAY_RETURN_URL 
+const {
+  VNPAY_TMN_CODE,
+  VNPAY_HASH_SECRET,
+  VNPAY_URL,
+  VNPAY_RETURN_URL
 } = require('../config/env');
 const Transaction = require('../models/Transaction');
 const PricingPlan = require('../models/PricingPlan');
@@ -29,7 +29,7 @@ const sortObject = (obj) => {
 const createPaymentUrl = async (req, userId, planId) => {
   const date = new Date();
   const createDate = moment(date).format('YYYYMMDDHHmmss');
-  
+
   const ipAddr = req.headers['x-forwarded-for'] ||
     req.socket.remoteAddress ||
     '127.0.0.1';
@@ -40,14 +40,14 @@ const createPaymentUrl = async (req, userId, planId) => {
 
   const amount = plan.price;
   const orderInfo = `Mua goi ${plan.name}`;
-  
+
   const tmnCode = VNPAY_TMN_CODE;
   const secretKey = VNPAY_HASH_SECRET;
   let vnpUrl = VNPAY_URL;
   const returnUrl = VNPAY_RETURN_URL;
-  
+
   const orderId = moment(date).format('DDHHmmss'); // Simplified order ID
-  
+
   // 2. Create Transaction Pending
   await Transaction.create({
     user: userId,
@@ -76,9 +76,9 @@ const createPaymentUrl = async (req, userId, planId) => {
 
   const signData = querystring.stringify(vnp_Params, { encode: false });
   const hmac = crypto.createHmac("sha512", secretKey);
-  const signed = hmac.update(new Buffer(signData, 'utf-8')).digest("hex"); 
+  const signed = hmac.update(new Buffer(signData, 'utf-8')).digest("hex");
   vnp_Params['vnp_SecureHash'] = signed;
-  
+
   vnpUrl += '?' + querystring.stringify(vnp_Params, { encode: false });
 
   return vnpUrl;
@@ -102,7 +102,7 @@ const verifyReturnUrl = (vnp_Params) => {
 const completeTransaction = async (txnRef, vnpayTransactionNo) => {
   const transaction = await Transaction.findOne({ txnRef }).populate('plan');
   if (!transaction) return false;
-  
+
   if (transaction.status === 'COMPLETED') return true; // Already processed
 
   transaction.status = 'COMPLETED';
@@ -110,19 +110,30 @@ const completeTransaction = async (txnRef, vnpayTransactionNo) => {
   transaction.completedAt = new Date();
   await transaction.save();
 
-  // Activate Premium
+  // Activate Subscription
   if (transaction.type === 'PREMIUM_SUBSCRIPTION' && transaction.plan) {
     const User = require('../models/User'); // Lazy load
     const user = await User.findById(transaction.user);
-    
-    // Add days to current expiry or now
+
     const now = new Date();
-    const currentExpiry = user.premiumExpiry && user.premiumExpiry > now ? user.premiumExpiry : now;
-    
-    currentExpiry.setDate(currentExpiry.getDate() + transaction.plan.durationDays);
-    
-    user.isPremium = true;
-    user.premiumExpiry = currentExpiry;
+    const plan = transaction.plan;
+
+    // Set the subscription tier from the plan
+    user.subscriptionTier = plan.tier;
+    user.subscriptionStartDate = now;
+
+    // Calculate expiry for non-LIFETIME plans
+    if (plan.tier === 'LIFETIME') {
+      user.subscriptionExpiry = null; // Never expires
+    } else {
+      // Add days to current expiry or now
+      const currentExpiry = user.subscriptionExpiry && user.subscriptionExpiry > now
+        ? new Date(user.subscriptionExpiry)
+        : now;
+      currentExpiry.setDate(currentExpiry.getDate() + plan.durationDays);
+      user.subscriptionExpiry = currentExpiry;
+    }
+
     await user.save();
   }
 

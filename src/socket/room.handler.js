@@ -5,6 +5,13 @@ const { joinRoom, leaveRoom } = require('../services/room.service');
 // roomId -> { timeout: NodeJS.Timeout, status, startTime, duration, mode, endTime }
 const roomTimers = {};
 
+// FREE User Session Timers - userId -> { warningTimeout, kickTimeout, roomId, socketId }
+const freeUserSessionTimers = {};
+
+// FREE tier limits (in milliseconds)
+const FREE_SESSION_DURATION = 60 * 60 * 1000; // 60 minutes
+const FREE_SESSION_WARNING = 5 * 60 * 1000; // 5 minute warning before kick
+
 const TIMER_MODES = {
   'POMODORO_25_5': { focus: 25, break: 5 },
   'POMODORO_50_10': { focus: 50, break: 10 },
@@ -14,6 +21,79 @@ const TIMER_MODES = {
 
 const registerRoomHandlers = (io, socket) => {
   const userId = socket.user.id;
+
+  // Helper: Clear FREE user session timers
+  const clearFreeUserTimers = (uid) => {
+    if (freeUserSessionTimers[uid]) {
+      clearTimeout(freeUserSessionTimers[uid].warningTimeout);
+      clearTimeout(freeUserSessionTimers[uid].kickTimeout);
+      delete freeUserSessionTimers[uid];
+    }
+  };
+
+  // Helper: Start FREE user session timer
+  const startFreeUserSessionTimer = (uid, roomId, socketId) => {
+    // Clear existing timers
+    clearFreeUserTimers(uid);
+
+    const warningTime = FREE_SESSION_DURATION - FREE_SESSION_WARNING;
+
+    // Warning timeout (55 minutes)
+    const warningTimeout = setTimeout(() => {
+      io.to(socketId).emit('session-warning', {
+        message: 'Bạn còn 5 phút trong phiên học miễn phí. Nâng cấp HOCA+ để học không giới hạn!',
+        remainingMinutes: 5
+      });
+
+      // Also send as system chat message
+      io.to(socketId).emit('chat-message', {
+        userId: 'system',
+        displayName: 'System',
+        message: '⚠️ Còn 5 phút! Phiên học miễn phí sắp kết thúc. Nâng cấp HOCA+ để học không giới hạn.',
+        timestamp: new Date().toISOString()
+      });
+    }, warningTime);
+
+    // Kick timeout (60 minutes)
+    const kickTimeout = setTimeout(async () => {
+      // Force leave room
+      try {
+        await leaveRoom(roomId, uid);
+      } catch (e) {
+        console.error('Error leaving room on session timeout:', e);
+      }
+
+      // Notify the user they've been kicked
+      io.to(socketId).emit('session-expired', {
+        message: 'Phiên học miễn phí 60 phút đã kết thúc. Nâng cấp HOCA+ để học không giới hạn!',
+        reason: 'FREE_SESSION_LIMIT'
+      });
+
+      // Emit leave to others
+      io.to(roomId).emit('user-left', { userId: uid, socketId, reason: 'session_expired' });
+
+      // Force disconnect from room
+      const targetSocket = io.sockets.sockets.get(socketId);
+      if (targetSocket) {
+        targetSocket.leave(roomId);
+      }
+
+      // Clear timers
+      clearFreeUserTimers(uid);
+
+      console.log(`FREE user ${uid} auto-kicked from room ${roomId} after 60 minutes`);
+    }, FREE_SESSION_DURATION);
+
+    freeUserSessionTimers[uid] = {
+      warningTimeout,
+      kickTimeout,
+      roomId,
+      socketId,
+      startTime: Date.now()
+    };
+
+    console.log(`Started 60-minute session timer for FREE user ${uid}`);
+  };
 
   // Helper to switch phases
   const runTimerPhase = (roomId, phase, modeKey) => {
@@ -77,9 +157,24 @@ const registerRoomHandlers = (io, socket) => {
         socketId: socket.id,
         userInfo: {
           displayName: socket.user.displayName,
-          avatar: socket.user.avatar
+          avatar: socket.user.avatar,
+          subscriptionTier: socket.user.subscriptionTier
         }
       });
+
+      // Start FREE user session timer if applicable
+      const tier = socket.user.subscriptionTier || 'FREE';
+      if (tier === 'FREE' && socket.user.role !== 'ADMIN') {
+        startFreeUserSessionTimer(userId, roomId, socket.id);
+
+        // Send session info to client
+        socket.emit('session-info', {
+          tier: 'FREE',
+          sessionDurationMinutes: 60,
+          warningAtMinutes: 55,
+          startTime: Date.now()
+        });
+      }
 
       // Sync Timer - if timer exists, sync it; if not, auto-start!
       if (roomTimers[roomId]) {
@@ -93,13 +188,15 @@ const registerRoomHandlers = (io, socket) => {
         console.log(`Auto-started timer for room ${roomId} with mode ${mode}`);
       }
 
-      console.log(`User ${userId} joined room ${roomId}`);
+      console.log(`User ${userId} (${tier}) joined room ${roomId}`);
     } catch (error) {
       socket.emit('error', { message: error.message });
     }
   });
 
   socket.on('leave-room', async ({ roomId }) => {
+    // Clear FREE user timers when leaving
+    clearFreeUserTimers(userId);
     await handleLeave(roomId);
   });
 
@@ -202,10 +299,12 @@ const registerRoomHandlers = (io, socket) => {
   });
 
   socket.on('chat-message', ({ roomId, message }) => {
-    // Pro-only chat restriction
-    if (!socket.user.isPremium && socket.user.role !== 'ADMIN') {
-      console.log(socket.user);
-      socket.emit('chat-error', { message: 'Tính năng chat chỉ dành cho người dùng Pro. Nâng cấp ngay gói Pro!' });
+    // Chat only for MONTHLY, YEARLY, LIFETIME or ADMIN
+    const tier = socket.user.subscriptionTier || 'FREE';
+    const canChat = tier !== 'FREE' || socket.user.role === 'ADMIN';
+
+    if (!canChat) {
+      socket.emit('chat-error', { message: 'Tính năng chat chỉ dành cho gói HOCA+ Tháng trở lên. Nâng cấp ngay!' });
       return;
     }
 

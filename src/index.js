@@ -18,7 +18,13 @@ const startServer = async () => {
       cors: {
         origin: '*', // Adjust in production
         methods: ['GET', 'POST']
-      }
+      },
+      pingTimeout: 60000, // 60s - time to wait for ping response
+      pingInterval: 25000, // 25s - interval between pings
+      upgradeTimeout: 30000,
+      allowUpgrades: true,
+      transports: ['websocket', 'polling'],
+      connectTimeout: 45000
     });
     
     require('./socket')(io);

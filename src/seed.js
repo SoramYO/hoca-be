@@ -69,6 +69,37 @@ const seedData = async () => {
       console.log('✅ Created default admin: admin@hoca.com / adminpassword123');
     }
 
+    // Seed Pricing Plans
+    const PricingPlan = require('./models/PricingPlan');
+    const plans = [
+      {
+        name: 'Gói Tháng Premium',
+        description: 'Truy cập đầy đủ tính năng trong 30 ngày',
+        price: 99000,
+        tier: 'MONTHLY',
+        durationDays: 30,
+        isActive: true,
+        features: ['Màn hình ảo', 'Phòng học không giới hạn', 'Sticker độc quyền', 'Chất lượng HD']
+      },
+      {
+        name: 'Gói Năm Premium',
+        description: 'Tiết kiệm 16% so với gói tháng',
+        price: 999000,
+        tier: 'YEARLY',
+        durationDays: 365,
+        isActive: true,
+        features: ['Màn hình ảo', 'Phòng học không giới hạn', 'Sticker độc quyền', 'Chất lượng HD', 'Huy hiệu độc quyền']
+      }
+    ];
+
+    for (const plan of plans) {
+      const exists = await PricingPlan.findOne({ tier: plan.tier });
+      if (!exists) {
+        await PricingPlan.create(plan);
+        console.log(`Created plan: ${plan.name}`);
+      }
+    }
+
     // Seed Motivational Quotes
     await quoteService.seedQuotes();
 

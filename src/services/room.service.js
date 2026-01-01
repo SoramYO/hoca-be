@@ -2,6 +2,7 @@ const Room = require('../models/Room');
 const StudySession = require('../models/StudySession');
 const User = require('../models/User');
 const SystemConfig = require('../models/SystemConfig');
+const subscriptionService = require('./subscription.service');
 
 // Helper: Get config with default
 const getConfig = async (key, defaultVal) => {
@@ -21,45 +22,54 @@ const resetDailyRoomMinutesIfNeeded = async (user) => {
   const now = new Date();
   if (!isSameDay(user.lastRoomDate, now)) {
     user.todayRoomMinutes = 0;
+    user.todaySessionCount = 0; // Also reset session count
     user.lastRoomDate = now;
     await user.save();
   }
 };
 
-// Helper to check creation limit
-const canCreateRoom = async (userId, userRole) => {
-  if (userRole === 'ADMIN') return true;
+// Helper to check room ownership limit
+const canCreateRoom = async (userId) => {
+  const user = await User.findById(userId);
+  if (!user) return false;
+  if (user.role === 'ADMIN') return true;
 
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
+  // Get room limit based on tier
+  const roomLimit = subscriptionService.getRoomLimit(user);
 
-  const count = await Room.countDocuments({
+  // Count owned rooms (not daily, but total owned)
+  const ownedRoomCount = await Room.countDocuments({
     owner: userId,
-    createdAt: { $gte: startOfDay }
+    isActive: true
   });
 
-  // Limit: 2 rooms per day for free users (MEMBER)
-  // TODO: Check if user is PREMIUM. Assuming 'isPremium' on User model.
-  const user = await User.findById(userId);
-  if (user.isPremium) return true;
-
-  return count < 2;
+  return ownedRoomCount < roomLimit;
 };
 
 const createRoom = async (userId, roomData) => {
   const user = await User.findById(userId);
+  if (!user) throw new Error('User not found');
 
-  const canCreate = await canCreateRoom(userId, user.role);
+  const canCreate = await canCreateRoom(userId);
   if (!canCreate) {
-    throw new Error('Daily room creation limit reached (2 rooms/day for free users)');
+    const roomLimit = subscriptionService.getRoomLimit(user);
+    const tier = subscriptionService.getEffectiveTier(user);
+
+    if (tier === 'FREE') {
+      throw new Error(`Bạn đã đạt giới hạn ${roomLimit} phòng cho tài khoản miễn phí. Nâng cấp HOCA+ để tạo thêm phòng!`);
+    } else if (tier === 'MONTHLY') {
+      throw new Error(`Bạn đã đạt giới hạn ${roomLimit} phòng cho gói Tháng. Nâng cấp HOCA+ Năm để tạo không giới hạn!`);
+    }
+    throw new Error('Đã đạt giới hạn số phòng');
   }
 
-  // Set maxParticipants based on premium status
-  const maxParticipants = user.isPremium ? 999 : 30; // Effectively unlimited for premium
+  // Set maxParticipants based on tier
+  const tier = subscriptionService.getEffectiveTier(user);
+  const maxParticipants = tier === 'FREE' ? 30 : 999; // Effectively unlimited for premium
 
   const room = await Room.create({
     ...roomData,
-    maxParticipants, // Override with premium-based limit
+    maxParticipants,
     owner: userId,
     isActive: true
   });
@@ -100,12 +110,22 @@ const joinRoom = async (roomId, userId, password) => {
     throw new Error('Bạn đang ở trong một phòng khác. Vui lòng rời phòng trước khi tham gia phòng mới.');
   }
 
-  // === RESTRICTION 2: Free User Daily Time Limit (3h = 180 mins) ===
-  if (!user.isPremium) {
+  // === RESTRICTION 2: Subscription-based limits ===
+  const tier = subscriptionService.getEffectiveTier(user);
+
+  if (tier === 'FREE') {
     await resetDailyRoomMinutesIfNeeded(user);
-    const freeDailyLimit = await getConfig('freeDailyStudyMinutes', 180);
+
+    // Check session count limit (2 per day for FREE)
+    const sessionEligibility = subscriptionService.checkFreeUserSessionEligibility(user);
+    if (!sessionEligibility.canJoin) {
+      throw new Error(sessionEligibility.reason);
+    }
+
+    // Check total daily time limit
+    const freeDailyLimit = await getConfig('freeDailyStudyMinutes', 120); // 2 sessions x 60 mins
     if (user.todayRoomMinutes >= freeDailyLimit) {
-      throw new Error(`Bạn đã đạt giới hạn ${freeDailyLimit / 60} giờ học miễn phí hôm nay. Nâng cấp Pro để học không giới hạn!`);
+      throw new Error(`Bạn đã đạt giới hạn ${freeDailyLimit} phút học miễn phí hôm nay. Nâng cấp HOCA+ để học không giới hạn!`);
     }
   }
 
@@ -133,28 +153,43 @@ const joinRoom = async (roomId, userId, password) => {
 
   // Check Capacity
   if (room.activeParticipants.length >= room.maxParticipants) {
-    // Check if user is already in (don't count as full)
     const alreadyJoined = room.activeParticipants.some(id => id.toString() === userId.toString());
     if (!alreadyJoined) {
-      // Suggest premium upgrade if hitting free tier limit
-      const premiumMessage = !user.isPremium && room.maxParticipants === 30
+      const premiumMessage = tier === 'FREE' && room.maxParticipants === 30
         ? ' Nâng cấp HOCA+ để tạo phòng không giới hạn thành viên!'
         : '';
       throw new Error(`Phòng đã đầy (${room.maxParticipants} người).${premiumMessage}`);
     }
   }
 
-  // Add to active participants using $addToSet to prevent duplicates (atomic operation)
+  // Add to active participants
   await Room.findByIdAndUpdate(cleanId, {
     $addToSet: { activeParticipants: userId }
   });
 
-  // === Set user's currentRoomId ===
+  // === Set user's currentRoomId and session tracking ===
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
   user.currentRoomId = cleanId;
+  user.currentSessionStartTime = now;
+
+  // Update session count for FREE users
+  if (tier === 'FREE') {
+    const lastSessionDate = user.lastSessionDate ? new Date(user.lastSessionDate) : null;
+    const isNewDay = !lastSessionDate || lastSessionDate < today;
+
+    if (isNewDay) {
+      user.todaySessionCount = 1;
+    } else {
+      user.todaySessionCount = (user.todaySessionCount || 0) + 1;
+    }
+    user.lastSessionDate = now;
+  }
+
   await user.save();
 
   // Start Study Session
-  // Check if open session exists?
   let session = await StudySession.findOne({ user: userId, room: roomId, endTime: null });
   if (!session) {
     session = await StudySession.create({

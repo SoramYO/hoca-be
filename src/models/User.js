@@ -17,9 +17,19 @@ const userSchema = new mongoose.Schema({
     default: 'MEMBER'
   },
 
-  // Premium Status
-  isPremium: { type: Boolean, default: false },
-  premiumExpiry: { type: Date },
+  // Subscription Tier System
+  subscriptionTier: {
+    type: String,
+    enum: ['FREE', 'MONTHLY', 'YEARLY', 'LIFETIME'],
+    default: 'FREE'
+  },
+  subscriptionExpiry: { type: Date },
+  subscriptionStartDate: { type: Date },
+
+  // Session tracking for FREE tier (60min limit, 2 sessions/day)
+  todaySessionCount: { type: Number, default: 0 },
+  lastSessionDate: { type: Date },
+  currentSessionStartTime: { type: Date }, // For tracking 60-min limit
 
   // Study Stats
   dailyStudyGoal: { type: Number, default: 120 }, // minutes
@@ -47,6 +57,7 @@ const userSchema = new mongoose.Schema({
 
   // Room Tracking
   currentRoomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Room', default: null },
+  ownedRoomCount: { type: Number, default: 0 }, // Track total rooms owned
   todayRoomMinutes: { type: Number, default: 0 }, // For Free user 3h/day limit
   lastRoomDate: { type: Date }, // To reset todayRoomMinutes daily
 
@@ -63,6 +74,17 @@ const userSchema = new mongoose.Schema({
   timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
+});
+
+// Virtual: isPremium for backward compatibility
+userSchema.virtual('isPremium').get(function () {
+  if (this.subscriptionTier === 'FREE') return false;
+  if (this.subscriptionTier === 'LIFETIME') return true;
+  // For MONTHLY/YEARLY, check if subscription is still valid
+  if (this.subscriptionExpiry && new Date(this.subscriptionExpiry) < new Date()) {
+    return false;
+  }
+  return true;
 });
 
 // Hash password before saving

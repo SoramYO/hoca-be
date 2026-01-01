@@ -7,8 +7,8 @@ const client = new OAuth2Client(GOOGLE_CLIENT_ID);
 const crypto = require('crypto');
 const emailService = require('./email.service');
 
-const signToken = (id, role, isPremium) => {
-  return jwt.sign({ id, role, isPremium }, JWT_SECRET, { expiresIn: '7d' });
+const signToken = (id, role, subscriptionTier) => {
+  return jwt.sign({ id, role, subscriptionTier }, JWT_SECRET, { expiresIn: '7d' });
 };
 
 const registerUser = async (userData) => {
@@ -27,7 +27,7 @@ const registerUser = async (userData) => {
     password
   });
 
-  const token = signToken(user._id, user.role, user.isPremium);
+  const token = signToken(user._id, user.role, user.subscriptionTier);
 
   return { user, token };
 };
@@ -45,7 +45,7 @@ const loginUser = async ({ email, password }) => {
     throw new Error('Invalid credentials');
   }
 
-  const token = signToken(user._id, user.role, user.isPremium);
+  const token = signToken(user._id, user.role, user.subscriptionTier);
 
   // Return user without password
   const userObj = user.toObject();
@@ -142,7 +142,7 @@ const resetPassword = async (token, newPassword) => {
 
   await user.save();
 
-  const newToken = signToken(user._id, user.role, user.isPremium);
+  const newToken = signToken(user._id, user.role, user.subscriptionTier);
   return { token: newToken, user };
 };
 
@@ -205,7 +205,7 @@ const googleLogin = async (token) => {
     });
   }
 
-  const tokenJWT = signToken(user._id, user.role, user.isPremium);
+  const tokenJWT = signToken(user._id, user.role, user.subscriptionTier);
   return { user, token: tokenJWT };
 };
 
