@@ -19,7 +19,6 @@ const buildApp = async () => {
     ? true // Use default Pino logger in production
     : {
       transport: {
-        target: 'pino-pretty',
         options: {
           translateTime: 'HH:MM:ss Z',
           ignore: 'pid,hostname'
