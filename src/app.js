@@ -15,16 +15,7 @@ require('./models/Message');
 
 const buildApp = async () => {
   // Configure logger based on environment
-  const loggerConfig = process.env.NODE_ENV === 'production'
-    ? true // Use default Pino logger in production
-    : {
-      transport: {
-        options: {
-          translateTime: 'HH:MM:ss Z',
-          ignore: 'pid,hostname'
-        }
-      }
-    };
+  const loggerConfig = true;
 
   const app = fastify({
     logger: loggerConfig
