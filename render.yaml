@@ -6,28 +6,26 @@ services:
     region: singapore # Change to your preferred region
     plan: free # Options: free, starter, standard, pro
     branch: main # Git branch to deploy
-    buildCommand: npm install
+    buildCommand: npm ci # Faster and more reliable than npm install
     startCommand: npm start
-    healthCheckPath: / # Adjust if you have a health check endpoint
+    healthCheckPath: /
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: 10000 # Render's default port
+        value: 10000
       - key: MONGODB_URI
-        fromDatabase:
-          name: hoca-mongodb
-          property: connectionString
+        sync: false # Set manually in Render dashboard
       - key: JWT_SECRET
-        generateValue: true # Auto-generate secure secret
+        generateValue: true
       - key: JWT_REFRESH_SECRET
-        generateValue: true # Auto-generate secure refresh secret
+        generateValue: true
       - key: GOOGLE_CLIENT_ID
-        sync: false # Set manually in Render dashboard
+        sync: false
       - key: GOOGLE_CLIENT_SECRET
-        sync: false # Set manually in Render dashboard
+        sync: false
       - key: EMAIL_HOST
-        sync: false # Set manually if using email
+        sync: false
       - key: EMAIL_PORT
         sync: false
       - key: EMAIL_USER
@@ -35,13 +33,6 @@ services:
       - key: EMAIL_PASSWORD
         sync: false
       - key: FRONTEND_URL
-        value: https://hoca.vercel.app # Update with your frontend URL
-    autoDeploy: true # Auto-deploy on git push
+        value: https://hoca.vercel.app
+    autoDeploy: true
 
-databases:
-  # MongoDB Database
-  - name: hoca-mongodb
-    databaseName: hoca
-    plan: free # Options: free, standard-0, standard-4, standard-16, etc.
-    region: singapore # Same region as your backend for lower latency
-    ipAllowList: [] # Empty for public access (Render will connect via private network)
