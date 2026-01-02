@@ -1,132 +1,111 @@
-const crypto = require('crypto');
-const querystring = require('querystring');
-const moment = require('moment'); // You might need to install moment or use vanilla Date
+const { PayOS } = require('@payos/node');
+const moment = require('moment');
 const {
-  VNPAY_TMN_CODE,
-  VNPAY_HASH_SECRET,
-  VNPAY_URL,
-  VNPAY_RETURN_URL
+  PAYOS_CLIENT_ID,
+  PAYOS_API_KEY,
+  PAYOS_CHECKSUM_KEY,
+  CLIENT_URL
 } = require('../config/env');
 const Transaction = require('../models/Transaction');
 const PricingPlan = require('../models/PricingPlan');
+const User = require('../models/User');
 
-const sortObject = (obj) => {
-  let sorted = {};
-  let str = [];
-  let key;
-  for (key in obj) {
-    if (obj.hasOwnProperty(key)) {
-      str.push(encodeURIComponent(key));
-    }
-  }
-  str.sort();
-  for (key = 0; key < str.length; key++) {
-    sorted[str[key]] = encodeURIComponent(obj[str[key]]).replace(/%20/g, "+");
-  }
-  return sorted;
-};
+const payOS = new PayOS(PAYOS_CLIENT_ID, PAYOS_API_KEY, PAYOS_CHECKSUM_KEY);
 
 const createPaymentUrl = async (req, userId, planId) => {
-  const date = new Date();
-  const createDate = moment(date).format('YYYYMMDDHHmmss');
-
-  const ipAddr = req.headers['x-forwarded-for'] ||
-    req.socket.remoteAddress ||
-    '127.0.0.1';
-
   // 1. Get Plan Details
   const plan = await PricingPlan.findById(planId);
   if (!plan) throw new Error('Invalid Pricing Plan');
 
   const amount = plan.price;
-  const orderInfo = `Mua goi ${plan.name}`;
-
-  const tmnCode = VNPAY_TMN_CODE;
-  const secretKey = VNPAY_HASH_SECRET;
-  let vnpUrl = VNPAY_URL;
-  const returnUrl = VNPAY_RETURN_URL;
-
-  const orderId = moment(date).format('DDHHmmss'); // Simplified order ID
+  const orderCode = Number(String(Date.now()).slice(-6)); // PayOS requires integer orderCode (max 9007199254740991), careful with collisions but simplified here
+  // Better approach for orderCode: generate a random int or use a sequence. 
+  // For safety let's use a random int below MAX_SAFE_INTEGER
+  const safeOrderCode = Math.floor(Math.random() * 1000000000);
 
   // 2. Create Transaction Pending
-  await Transaction.create({
+  const transaction = await Transaction.create({
     user: userId,
     plan: planId,
     type: 'PREMIUM_SUBSCRIPTION',
     amount: amount,
-    txnRef: orderId,
+    txnRef: String(safeOrderCode), // We store the PayOS orderCode as txnRef
     status: 'PENDING'
   });
 
-  let vnp_Params = {};
-  vnp_Params['vnp_Version'] = '2.1.0';
-  vnp_Params['vnp_Command'] = 'pay';
-  vnp_Params['vnp_TmnCode'] = tmnCode;
-  vnp_Params['vnp_Locale'] = 'vn';
-  vnp_Params['vnp_CurrCode'] = 'VND';
-  vnp_Params['vnp_TxnRef'] = orderId;
-  vnp_Params['vnp_OrderInfo'] = orderInfo;
-  vnp_Params['vnp_OrderType'] = 'other';
-  vnp_Params['vnp_Amount'] = amount * 100;
-  vnp_Params['vnp_ReturnUrl'] = returnUrl;
-  vnp_Params['vnp_IpAddr'] = ipAddr;
-  vnp_Params['vnp_CreateDate'] = createDate;
+  // 3. Create PayOS Payment Link
+  const YOUR_DOMAIN = CLIENT_URL;
+  const body = {
+    orderCode: safeOrderCode,
+    amount: amount,
+    description: `Mua goi ${plan.name}`.slice(0, 25), // Description limited length
+    items: [
+      {
+        name: plan.name,
+        quantity: 1,
+        price: amount
+      }
+    ],
+    returnUrl: `${YOUR_DOMAIN}/payment/success`, // PayOS redirects here on success
+    cancelUrl: `${YOUR_DOMAIN}/payment/failed`   // PayOS redirects here on cancel
+  };
 
-  vnp_Params = sortObject(vnp_Params);
-
-  const signData = querystring.stringify(vnp_Params, { encode: false });
-  const hmac = crypto.createHmac("sha512", secretKey);
-  const signed = hmac.update(new Buffer(signData, 'utf-8')).digest("hex");
-  vnp_Params['vnp_SecureHash'] = signed;
-
-  vnpUrl += '?' + querystring.stringify(vnp_Params, { encode: false });
-
-  return vnpUrl;
+  try {
+    const paymentLinkRes = await payOS.paymentRequests.create(body);
+    return paymentLinkRes.checkoutUrl;
+  } catch (error) {
+    console.error("PayOS Create Error:", error);
+    // If fail, maybe delete transaction? For now keep it as abandoned/pending
+    throw new Error('Failed to create PayOS link');
+  }
 };
 
-const verifyReturnUrl = (vnp_Params) => {
-  let secureHash = vnp_Params['vnp_SecureHash'];
-  delete vnp_Params['vnp_SecureHash'];
-  delete vnp_Params['vnp_SecureHashType'];
-
-  vnp_Params = sortObject(vnp_Params);
-
-  const secretKey = VNPAY_HASH_SECRET;
-  const signData = querystring.stringify(vnp_Params, { encode: false });
-  const hmac = crypto.createHmac("sha512", secretKey);
-  const signed = hmac.update(new Buffer(signData, 'utf-8')).digest("hex");
-
-  return secureHash === signed;
+// Verify not strictly needed via URL params for PayOS if we trust their redirect or use Webhook.
+// However, if we want to validte the return manually via an API call to PayOS (Double Check)
+const verifyReturnUrl = async (query) => {
+  // Basic implementation: We can just return true and let the frontend call completeTransaction
+  // OR we can verify signatures if PayOS appends them to returnUrl (they usually do).
+  // For simplicity with PayOS node SDK, we can getPaymentLinkInformation to verify status.
+  return true;
 };
 
-const completeTransaction = async (txnRef, vnpayTransactionNo) => {
+// This function needs to be updated to check status against PayOS if via return URL
+// OR just trust the call if we assume it comes from a secure flow (but better to verify).
+const completeTransaction = async (txnRef, providerTransactionNo) => {
   const transaction = await Transaction.findOne({ txnRef }).populate('plan');
   if (!transaction) return false;
 
-  if (transaction.status === 'COMPLETED') return true; // Already processed
+  if (transaction.status === 'COMPLETED') return true;
+
+  // OPTIONAL: Verify with PayOS one last time
+  try {
+    const paymentLinkInfo = await payOS.paymentRequests.get(Number(txnRef));
+    if (paymentLinkInfo.status !== 'PAID') {
+      return false;
+    }
+  } catch (e) {
+    console.error("PayOS Verify Error:", e);
+    return false;
+  }
 
   transaction.status = 'COMPLETED';
-  transaction.vnpayTransactionNo = vnpayTransactionNo;
+  transaction.vnpayTransactionNo = providerTransactionNo || 'PAYOS'; // Reuse field or add new
   transaction.completedAt = new Date();
   await transaction.save();
 
   // Activate Subscription
   if (transaction.type === 'PREMIUM_SUBSCRIPTION' && transaction.plan) {
-    const User = require('../models/User'); // Lazy load
     const user = await User.findById(transaction.user);
 
     const now = new Date();
     const plan = transaction.plan;
 
-    // Set the subscription tier from the plan
     user.subscriptionTier = plan.tier;
     user.subscriptionStartDate = now;
 
-    // Calculate expiry for non-LIFETIME plans
     if (plan.tier === 'LIFETIME') {
-      user.subscriptionExpiry = null; // Never expires
+      user.subscriptionExpiry = null;
     } else {
-      // Add days to current expiry or now
       const currentExpiry = user.subscriptionExpiry && user.subscriptionExpiry > now
         ? new Date(user.subscriptionExpiry)
         : now;

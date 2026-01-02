@@ -3,7 +3,8 @@ const { protect } = require('../middlewares/auth.middleware');
 
 const paymentRoutes = async (fastify, options) => {
   fastify.post('/create_payment_url', { preHandler: protect }, paymentController.createPayment);
-  fastify.get('/vnpay_return', paymentController.vnpayReturn);
+  // Endpoint to verify payment after PayOS redirect
+  fastify.post('/verify', { preHandler: protect }, paymentController.verifyPayment);
 };
 
 module.exports = paymentRoutes;
