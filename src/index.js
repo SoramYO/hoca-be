@@ -1,6 +1,6 @@
 const buildApp = require('./app');
 const connectDatabase = require('./config/database');
-const { PORT } = require('./config/env');
+const { PORT, CLIENT_URL } = require('./config/env');
 const { Server } = require('socket.io');
 
 const startServer = async () => {
@@ -16,7 +16,7 @@ const startServer = async () => {
     // 4. Setup Socket.io
     const io = new Server(app.server, {
       cors: {
-        origin: '*', // Adjust in production
+        origin: CLIENT_URL || '*', // Adjust in production
         methods: ['GET', 'POST']
       },
       pingTimeout: 60000, // 60s - time to wait for ping response
@@ -26,13 +26,13 @@ const startServer = async () => {
       transports: ['websocket', 'polling'],
       connectTimeout: 45000
     });
-    
+
     require('./socket')(io);
 
     // 5. Init Jobs
     require('./jobs/streak.job')();
 
-    global.io = io; 
+    global.io = io;
 
 
   } catch (error) {

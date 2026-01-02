@@ -89,6 +89,15 @@ const seedData = async () => {
         durationDays: 365,
         isActive: true,
         features: ['Màn hình ảo', 'Phòng học không giới hạn', 'Sticker độc quyền', 'Chất lượng HD', 'Huy hiệu độc quyền']
+      },
+      {
+        name: 'Gói vĩnh viễn',
+        description: 'Truy cập đầy đủ tính năng vĩnh viễn',
+        price: 999999999,
+        tier: 'LIFETIME',
+        durationDays: 365,
+        isActive: true,
+        features: ['Màn hình ảo', 'Phòng học không giới hạn', 'Sticker độc quyền', 'Chất lượng HD', 'Huy hiệu độc quyền']
       }
     ];
 
