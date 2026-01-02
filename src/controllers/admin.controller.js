@@ -8,7 +8,7 @@ const moment = require('moment');
 // User Management
 const getAllUsers = async (req, reply) => {
   try {
-    const { page = 1, limit = 10, search } = req.query;
+    const { page = 1, limit = 10, search, sortBy = 'createdAt', order = 'desc' } = req.query;
     const query = {};
     if (search) {
       query.$or = [
@@ -17,10 +17,13 @@ const getAllUsers = async (req, reply) => {
       ];
     }
 
+    const sortOptions = {};
+    sortOptions[sortBy] = order === 'asc' ? 1 : -1;
+
     const users = await User.find(query)
       .skip((page - 1) * limit)
       .limit(parseInt(limit))
-      .sort('-createdAt');
+      .sort(sortOptions);
 
     const total = await User.countDocuments(query);
 
@@ -36,9 +39,33 @@ const toggleBlockUser = async (req, reply) => {
     if (!user) return reply.code(404).send({ message: 'User not found' });
 
     user.isBlocked = !user.isBlocked;
+    // Also toggle lock for consistency if we want single status, but keeping separate for now per plan
     await user.save();
 
     reply.send({ message: `User ${user.isBlocked ? 'blocked' : 'unblocked'}`, user });
+  } catch (error) {
+    reply.code(500).send({ message: error.message });
+  }
+};
+
+const toggleLockUser = async (req, reply) => {
+  try {
+    const { reason } = req.body || {};
+    const user = await User.findById(req.params.id);
+    if (!user) return reply.code(404).send({ message: 'User not found' });
+
+    user.isLocked = !user.isLocked;
+    if (user.isLocked) {
+      user.lockReason = reason || 'Violation of community standards';
+      // Invalidate sessions - logic would go here (e.g. increase token version)
+      user.resetPasswordToken = undefined; // Force re-auth eventually
+    } else {
+      user.lockReason = '';
+    }
+
+    await user.save();
+
+    reply.send({ message: `User ${user.isLocked ? 'locked' : 'unlocked'}`, user });
   } catch (error) {
     reply.code(500).send({ message: error.message });
   }
@@ -499,5 +526,6 @@ module.exports = {
   deleteRoomCategory,
   getAdminRoomDetails,
   getSystemConfig,
-  updateSystemConfig
+  updateSystemConfig,
+  toggleLockUser
 };

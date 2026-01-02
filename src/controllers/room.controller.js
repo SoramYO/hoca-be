@@ -1,4 +1,5 @@
 const roomService = require('../services/room.service');
+const subscriptionService = require('../services/subscription.service');
 
 const createRoom = async (req, reply) => {
   try {
@@ -27,6 +28,15 @@ const getRoom = async (req, reply) => {
   }
 };
 
+const getMyRooms = async (req, reply) => {
+  try {
+    const rooms = await roomService.getUserRooms(req.user.id);
+    reply.send(rooms);
+  } catch (error) {
+    reply.code(500).send({ message: error.message });
+  }
+};
+
 const joinRoom = async (req, reply) => {
   try {
     const { password } = req.body || {};
@@ -46,60 +56,117 @@ const leaveRoom = async (req, reply) => {
   }
 };
 
-// Check if user can join a room (before entering lobby)
+/**
+ * Close room - only owner can close their room
+ */
+const closeRoom = async (req, reply) => {
+  try {
+    const Room = require('../models/Room');
+    const room = await Room.findById(req.params.id);
+
+    if (!room) {
+      return reply.code(404).send({ message: 'Room not found' });
+    }
+
+    // Check ownership
+    if (room.owner?.toString() !== req.user.id && req.user.role !== 'ADMIN') {
+      return reply.code(403).send({ message: 'Only room owner can close the room' });
+    }
+
+    const result = await roomService.closeRoom(req.params.id, 'manual');
+
+    // Notify participants via socket if available
+    if (global.io) {
+      global.io.to(req.params.id).emit('room-closed', {
+        roomId: req.params.id,
+        reason: 'manual',
+        message: 'Phòng đã được đóng bởi chủ phòng.'
+      });
+    }
+
+    reply.send(result);
+  } catch (error) {
+    reply.code(400).send({ message: error.message });
+  }
+};
+
+/**
+ * Check if user can join a room (before entering lobby)
+ * Uses subscription service for eligibility checks
+ */
 const checkJoinEligibility = async (req, reply) => {
   try {
     const User = require('../models/User');
-    const SystemConfig = require('../models/SystemConfig');
 
     const user = await User.findById(req.user.id);
     if (!user) {
       return reply.code(404).send({ canJoin: false, message: 'User not found' });
     }
 
-    // Premium users can always join
-    if (user.isPremium) {
-      return reply.send({ canJoin: true, remainingMinutes: Infinity });
-    }
+    // Use subscription service for eligibility check
+    const eligibility = subscriptionService.checkJoinRoomEligibility(user);
+    const tierLimits = subscriptionService.getTierLimits(subscriptionService.getEffectiveTier(user));
 
-    // Check daily limit for free users
-    const freeDailyLimit = await SystemConfig.getValue('freeDailyStudyMinutes', 180);
-    const now = new Date();
-
-    // Reset daily minutes if new day
-    if (user.lastRoomDate) {
-      const lastDate = new Date(user.lastRoomDate);
-      const isNewDay = now.getDate() !== lastDate.getDate() ||
-        now.getMonth() !== lastDate.getMonth() ||
-        now.getFullYear() !== lastDate.getFullYear();
-      if (isNewDay) {
-        user.todayRoomMinutes = 0;
-        user.lastRoomDate = now;
-        await user.save();
-      }
-    }
-
-    const usedMinutes = user.todayRoomMinutes || 0;
-    const remainingMinutes = Math.max(0, freeDailyLimit - usedMinutes);
-
-    if (usedMinutes >= freeDailyLimit) {
+    if (!eligibility.canJoin) {
       return reply.send({
         canJoin: false,
-        message: `Bạn đã đạt giới hạn ${freeDailyLimit / 60} giờ học miễn phí hôm nay. Nâng cấp Pro để học không giới hạn!`,
-        usedMinutes,
-        limitMinutes: freeDailyLimit,
+        message: eligibility.reason,
+        usedMinutes: user.todayRoomMinutes || 0,
+        limitMinutes: tierLimits.dailyStudyMinutes,
         remainingMinutes: 0
       });
     }
 
     reply.send({
       canJoin: true,
-      usedMinutes,
-      limitMinutes: freeDailyLimit,
-      remainingMinutes
+      usedMinutes: user.todayRoomMinutes || 0,
+      limitMinutes: tierLimits.dailyStudyMinutes,
+      remainingMinutes: eligibility.remainingMinutes
     });
   } catch (error) {
     reply.code(500).send({ canJoin: false, message: error.message });
+  }
+};
+
+/**
+ * Check if user can create a room
+ */
+const checkCreateEligibility = async (req, reply) => {
+  try {
+    const User = require('../models/User');
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return reply.code(404).send({ canCreate: false, message: 'User not found' });
+    }
+
+    const eligibility = subscriptionService.checkRoomCreationEligibility(user);
+    const tierLimits = subscriptionService.getTierLimits(subscriptionService.getEffectiveTier(user));
+
+    reply.send({
+      canCreate: eligibility.canCreate,
+      message: eligibility.reason,
+      todayRoomCreatedCount: user.todayRoomCreatedCount || 0,
+      roomsPerDay: tierLimits.roomsPerDay,
+      roomDurationMinutes: tierLimits.roomDurationMinutes,
+      requiresSequentialRooms: tierLimits.requireSequentialRooms,
+      hasActiveRoom: !!user.activePersonalRoomId
+    });
+  } catch (error) {
+    reply.code(500).send({ canCreate: false, message: error.message });
+  }
+};
+
+/**
+ * Get room categories (public for users)
+ */
+const getCategories = async (req, reply) => {
+  try {
+    const RoomCategory = require('../models/RoomCategory');
+    const categories = await RoomCategory.find().sort('name');
+    reply.send(categories);
+  } catch (error) {
+    reply.code(500).send({ message: error.message });
   }
 };
 
@@ -109,5 +176,10 @@ module.exports = {
   getRoom,
   joinRoom,
   leaveRoom,
-  checkJoinEligibility
+  closeRoom,
+  checkJoinEligibility,
+  checkCreateEligibility,
+  getCategories,
+  getMyRooms
 };
+

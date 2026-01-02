@@ -48,7 +48,9 @@ const userSchema = new mongoose.Schema({
   streakRecoveryUsedToday: { type: Boolean, default: false }, // If recovery was used today
 
   // Status
-  isBlocked: { type: Boolean, default: false },
+  isBlocked: { type: Boolean, default: false }, // Legacy block
+  isLocked: { type: Boolean, default: false }, // Admin lock
+  lockReason: { type: String, default: '' },
   notificationEnabled: { type: Boolean, default: true },
   isOnboarded: { type: Boolean, default: false },
 
@@ -60,6 +62,13 @@ const userSchema = new mongoose.Schema({
   ownedRoomCount: { type: Number, default: 0 }, // Track total rooms owned
   todayRoomMinutes: { type: Number, default: 0 }, // For Free user 3h/day limit
   lastRoomDate: { type: Date }, // To reset todayRoomMinutes daily
+
+  // Daily room creation tracking (resets daily)
+  todayRoomCreatedCount: { type: Number, default: 0 },
+  lastRoomCreatedDate: { type: Date },
+
+  // Track active personal room for FREE tier (must close before creating new)
+  activePersonalRoomId: { type: mongoose.Schema.Types.ObjectId, ref: 'Room', default: null },
 
   warnings: [{
     reason: String,

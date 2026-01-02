@@ -17,64 +17,111 @@ const isSameDay = (date1, date2) => {
     date1.getFullYear() === date2.getFullYear();
 };
 
-// Helper: Reset user's daily room minutes if new day
-const resetDailyRoomMinutesIfNeeded = async (user) => {
+// Helper: Reset user's daily stats if new day
+const resetDailyStatsIfNeeded = async (user) => {
   const now = new Date();
   if (!isSameDay(user.lastRoomDate, now)) {
     user.todayRoomMinutes = 0;
-    user.todaySessionCount = 0; // Also reset session count
+    user.todaySessionCount = 0;
     user.lastRoomDate = now;
-    await user.save();
   }
-};
-
-// Helper to check room ownership limit
-const canCreateRoom = async (userId) => {
-  const user = await User.findById(userId);
-  if (!user) return false;
-  if (user.role === 'ADMIN') return true;
-
-  // Get room limit based on tier
-  const roomLimit = subscriptionService.getRoomLimit(user);
-
-  // Count owned rooms (not daily, but total owned)
-  const ownedRoomCount = await Room.countDocuments({
-    owner: userId,
-    isActive: true
-  });
-
-  return ownedRoomCount < roomLimit;
+  if (!isSameDay(user.lastRoomCreatedDate, now)) {
+    user.todayRoomCreatedCount = 0;
+    user.lastRoomCreatedDate = now;
+  }
+  await user.save();
 };
 
 const createRoom = async (userId, roomData) => {
   const user = await User.findById(userId);
   if (!user) throw new Error('User not found');
 
-  const canCreate = await canCreateRoom(userId);
-  if (!canCreate) {
-    const roomLimit = subscriptionService.getRoomLimit(user);
-    const tier = subscriptionService.getEffectiveTier(user);
+  // Reset daily stats if new day
+  await resetDailyStatsIfNeeded(user);
 
-    if (tier === 'FREE') {
-      throw new Error(`Bạn đã đạt giới hạn ${roomLimit} phòng cho tài khoản miễn phí. Nâng cấp HOCA+ để tạo thêm phòng!`);
-    } else if (tier === 'MONTHLY') {
-      throw new Error(`Bạn đã đạt giới hạn ${roomLimit} phòng cho gói Tháng. Nâng cấp HOCA+ Năm để tạo không giới hạn!`);
-    }
-    throw new Error('Đã đạt giới hạn số phòng');
+  // Check room creation eligibility using subscription service
+  const eligibility = subscriptionService.checkRoomCreationEligibility(user);
+  if (!eligibility.canCreate) {
+    throw new Error(eligibility.reason);
   }
 
-  // Set maxParticipants based on tier
   const tier = subscriptionService.getEffectiveTier(user);
-  const maxParticipants = tier === 'FREE' ? 30 : 999; // Effectively unlimited for premium
+  const tierLimits = subscriptionService.getTierLimits(tier);
+
+  // Respect user's maxParticipants selection, but cap it at the tier's limit
+  const tierMaxParticipants = tier === 'FREE' ? 30 : 999;
+  const userRequestedMax = roomData.maxParticipants || 4;
+  const maxParticipants = Math.min(userRequestedMax, tierMaxParticipants);
+
+  // Calculate autoCloseAt for FREE tier rooms
+  let autoCloseAt = null;
+  if (tierLimits.roomDurationMinutes !== Infinity) {
+    autoCloseAt = new Date(Date.now() + tierLimits.roomDurationMinutes * 60 * 1000);
+  }
 
   const room = await Room.create({
     ...roomData,
     maxParticipants,
     owner: userId,
-    isActive: true
+    isActive: true,
+    autoCloseAt,
+    ownerTierAtCreation: tier
   });
 
+  // Update user's room creation tracking
+  user.todayRoomCreatedCount = (user.todayRoomCreatedCount || 0) + 1;
+  user.lastRoomCreatedDate = new Date();
+
+  // For FREE tier, track active personal room (sequential requirement)
+  if (tierLimits.requireSequentialRooms) {
+    user.activePersonalRoomId = room._id;
+  }
+
+  await user.save();
+
+  console.log(`Room created by ${user.displayName} (${tier}): ${room._id}, autoCloseAt: ${autoCloseAt}`);
+
   return room;
+};
+
+/**
+ * Close a room and clear owner's activePersonalRoomId
+ * @param {string} roomId 
+ * @param {string} reason - Reason for closing ('manual', 'auto_expired', 'admin')
+ */
+const closeRoom = async (roomId, reason = 'manual') => {
+  const room = await Room.findById(roomId);
+  if (!room) throw new Error('Room not found');
+  if (!room.isActive) return { message: 'Room already closed' };
+
+  room.isActive = false;
+  room.closedAt = new Date();
+  await room.save();
+
+  // Clear owner's activePersonalRoomId if this was their active room
+  if (room.owner) {
+    const owner = await User.findById(room.owner);
+    if (owner && owner.activePersonalRoomId?.toString() === roomId.toString()) {
+      owner.activePersonalRoomId = null;
+      await owner.save();
+    }
+  }
+
+  // End all active sessions in this room
+  await StudySession.updateMany(
+    { room: roomId, endTime: null },
+    { $set: { endTime: new Date(), isCompleted: true } }
+  );
+
+  // Clear currentRoomId for all participants
+  await User.updateMany(
+    { currentRoomId: roomId },
+    { $set: { currentRoomId: null } }
+  );
+
+  console.log(`Room ${roomId} closed. Reason: ${reason}`);
+
+  return { message: 'Room closed', reason };
 };
 
 const getPublicRooms = async (query = {}) => {
@@ -105,28 +152,18 @@ const joinRoom = async (roomId, userId, password) => {
   const user = await User.findById(userId);
   if (!user) throw new Error('User not found');
 
+  // Reset daily stats if new day
+  await resetDailyStatsIfNeeded(user);
+
   // === RESTRICTION 1: Single Room Participation (System-wide) ===
   if (user.currentRoomId && user.currentRoomId.toString() !== cleanId) {
     throw new Error('Bạn đang ở trong một phòng khác. Vui lòng rời phòng trước khi tham gia phòng mới.');
   }
 
-  // === RESTRICTION 2: Subscription-based limits ===
-  const tier = subscriptionService.getEffectiveTier(user);
-
-  if (tier === 'FREE') {
-    await resetDailyRoomMinutesIfNeeded(user);
-
-    // Check session count limit (2 per day for FREE)
-    const sessionEligibility = subscriptionService.checkFreeUserSessionEligibility(user);
-    if (!sessionEligibility.canJoin) {
-      throw new Error(sessionEligibility.reason);
-    }
-
-    // Check total daily time limit
-    const freeDailyLimit = await getConfig('freeDailyStudyMinutes', 120); // 2 sessions x 60 mins
-    if (user.todayRoomMinutes >= freeDailyLimit) {
-      throw new Error(`Bạn đã đạt giới hạn ${freeDailyLimit} phút học miễn phí hôm nay. Nâng cấp HOCA+ để học không giới hạn!`);
-    }
+  // === RESTRICTION 2: Check join eligibility based on daily study time ===
+  const joinEligibility = subscriptionService.checkJoinRoomEligibility(user);
+  if (!joinEligibility.canJoin) {
+    throw new Error(joinEligibility.reason);
   }
 
   let room;
@@ -141,7 +178,7 @@ const joinRoom = async (roomId, userId, password) => {
     throw new Error(`Room not found: ${cleanId}`);
   }
   if (!room.isActive) {
-    throw new Error('Room is inactive');
+    throw new Error('Phòng này đã đóng hoặc không còn hoạt động.');
   }
 
   // Check Password
@@ -150,6 +187,8 @@ const joinRoom = async (roomId, userId, password) => {
       throw new Error('Invalid room password');
     }
   }
+
+  const tier = subscriptionService.getEffectiveTier(user);
 
   // Check Capacity
   if (room.activeParticipants.length >= room.maxParticipants) {
@@ -169,23 +208,10 @@ const joinRoom = async (roomId, userId, password) => {
 
   // === Set user's currentRoomId and session tracking ===
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   user.currentRoomId = cleanId;
   user.currentSessionStartTime = now;
-
-  // Update session count for FREE users
-  if (tier === 'FREE') {
-    const lastSessionDate = user.lastSessionDate ? new Date(user.lastSessionDate) : null;
-    const isNewDay = !lastSessionDate || lastSessionDate < today;
-
-    if (isNewDay) {
-      user.todaySessionCount = 1;
-    } else {
-      user.todaySessionCount = (user.todaySessionCount || 0) + 1;
-    }
-    user.lastSessionDate = now;
-  }
+  user.lastRoomDate = now;
 
   await user.save();
 
@@ -199,7 +225,14 @@ const joinRoom = async (roomId, userId, password) => {
     });
   }
 
-  return { room, session };
+  // Get remaining time info for FREE users
+  const timeStatus = subscriptionService.getDailyStudyTimeStatus(user);
+
+  return {
+    room,
+    session,
+    remainingMinutes: timeStatus.remainingMinutes
+  };
 };
 
 const leaveRoom = async (roomId, userId) => {
@@ -226,6 +259,7 @@ const leaveRoom = async (roomId, userId) => {
   const user = await User.findById(userId);
   if (user) {
     user.currentRoomId = null;
+    user.currentSessionStartTime = null;
     if (session) {
       user.todayRoomMinutes = (user.todayRoomMinutes || 0) + (session.duration || 0);
     }
@@ -249,10 +283,34 @@ const updateUserStats = async (userId, minutes) => {
   }
 };
 
+/**
+ * Get rooms that need to be auto-closed (expired FREE tier rooms)
+ */
+const getExpiredRooms = async () => {
+  return await Room.find({
+    isActive: true,
+    autoCloseAt: { $lte: new Date() }
+  }).populate('owner', 'displayName');
+};
+
+const getUserRooms = async (userId) => {
+  return await Room.find({
+    owner: userId,
+    isActive: true
+  })
+    .populate('owner', 'displayName avatar')
+    .populate('category', 'name')
+    .sort('-createdAt');
+};
+
 module.exports = {
   createRoom,
+  closeRoom,
   getPublicRooms,
   getRoomById,
   joinRoom,
-  leaveRoom
+  joinRoom,
+  leaveRoom,
+  getExpiredRooms,
+  getUserRooms
 };

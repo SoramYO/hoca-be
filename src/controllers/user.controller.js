@@ -83,6 +83,15 @@ const updateVirtualBackground = async (req, reply) => {
   }
 };
 
+const getWeeklyActivity = async (req, reply) => {
+  try {
+    const activity = await userService.getWeeklyActivity(req.user.id);
+    reply.send(activity);
+  } catch (error) {
+    reply.code(400).send({ message: error.message });
+  }
+};
+
 module.exports = {
   getProfile,
   updateProfile,
@@ -91,5 +100,6 @@ module.exports = {
   updateStudyTime,
   getLeaderboard,
   recoverStreak,
-  updateVirtualBackground
+  updateVirtualBackground,
+  getWeeklyActivity
 };

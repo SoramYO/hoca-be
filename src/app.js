@@ -11,7 +11,9 @@ require('./models/RoomCategory');
 require('./models/Transaction');
 require('./models/Report');
 require('./models/SystemConfig');
+require('./models/SystemConfig');
 require('./models/Message');
+require('./models/Rank');
 const logger = require('./middlewares/logger.middleware');
 const buildApp = async () => {
   const app = fastify();
@@ -66,6 +68,7 @@ const buildApp = async () => {
   app.register(require('./routes/chat.routes'), { prefix: '/api/chat' });
   app.register(require('./routes/quote.routes'), { prefix: '/api/quotes' });
   app.register(require('./routes/upload.routes'), { prefix: '/api/upload' });
+  app.register(require('./routes/rank.routes'), { prefix: '/api/ranks' });
 
 
   return app;

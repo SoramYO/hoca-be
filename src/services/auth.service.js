@@ -93,7 +93,8 @@ const forgotPassword = async (email) => {
 
   // Create reset url
   // Note: Adjust CLIENT_URL in env or hardcode for now based on context
-  const resetUrl = `${CLIENT_URL}/auth/reset-password/${resetToken}`;
+  const baseUrl = CLIENT_URL.endsWith('/') ? CLIENT_URL.slice(0, -1) : CLIENT_URL;
+  const resetUrl = `${baseUrl}/auth/reset-password/${resetToken}`;
 
   const message = `
     <h1>You have requested a password reset</h1>

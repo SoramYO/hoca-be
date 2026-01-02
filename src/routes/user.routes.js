@@ -9,6 +9,7 @@ const userRoutes = async (fastify, options) => {
   fastify.put('/me', userController.updateProfile);
   fastify.patch('/me/virtual-background', userController.updateVirtualBackground);
   fastify.get('/me/dashboard', userController.getDashboard);
+  fastify.get('/me/weekly-activity', userController.getWeeklyActivity);
   fastify.post('/study-time', userController.updateStudyTime);
   fastify.get('/leaderboard', userController.getLeaderboard);
   fastify.post('/recover-streak', userController.recoverStreak);

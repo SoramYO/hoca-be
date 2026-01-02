@@ -10,6 +10,7 @@ const adminRoutes = async (fastify, options) => {
   fastify.get('/users', adminController.getAllUsers);
   fastify.get('/users/:id', adminController.getUserDetails);
   fastify.put('/users/:id/block', adminController.toggleBlockUser);
+  fastify.put('/users/:id/lock', adminController.toggleLockUser);
 
   // Dashboard Stats
   fastify.get('/stats', adminController.getSystemStats);

@@ -1,16 +1,14 @@
 const Room = require('../models/Room');
+const User = require('../models/User');
 const { joinRoom, leaveRoom } = require('../services/room.service');
+const subscriptionService = require('../services/subscription.service');
 
 // Timer State Management
 // roomId -> { timeout: NodeJS.Timeout, status, startTime, duration, mode, endTime }
 const roomTimers = {};
 
-// FREE User Session Timers - userId -> { warningTimeout, kickTimeout, roomId, socketId }
-const freeUserSessionTimers = {};
-
-// FREE tier limits (in milliseconds)
-const FREE_SESSION_DURATION = 60 * 60 * 1000; // 60 minutes
-const FREE_SESSION_WARNING = 5 * 60 * 1000; // 5 minute warning before kick
+// FREE User Daily Time Tracking - userId -> { checkInterval, roomId, socketId, lastCheck }
+const freeUserTimeTrackers = {};
 
 const TIMER_MODES = {
   'POMODORO_25_5': { focus: 25, break: 5 },
@@ -22,77 +20,104 @@ const TIMER_MODES = {
 const registerRoomHandlers = (io, socket) => {
   const userId = socket.user.id;
 
-  // Helper: Clear FREE user session timers
-  const clearFreeUserTimers = (uid) => {
-    if (freeUserSessionTimers[uid]) {
-      clearTimeout(freeUserSessionTimers[uid].warningTimeout);
-      clearTimeout(freeUserSessionTimers[uid].kickTimeout);
-      delete freeUserSessionTimers[uid];
+  // Helper: Clear FREE user time tracker
+  const clearFreeUserTracker = (uid) => {
+    if (freeUserTimeTrackers[uid]) {
+      clearInterval(freeUserTimeTrackers[uid].checkInterval);
+      delete freeUserTimeTrackers[uid];
     }
   };
 
-  // Helper: Start FREE user session timer
-  const startFreeUserSessionTimer = (uid, roomId, socketId) => {
-    // Clear existing timers
-    clearFreeUserTimers(uid);
+  // Helper: Start FREE user daily time tracker
+  // Checks every minute if user has exceeded daily limit
+  const startFreeUserTimeTracker = async (uid, roomId, socketId) => {
+    // Clear existing tracker
+    clearFreeUserTracker(uid);
 
-    const warningTime = FREE_SESSION_DURATION - FREE_SESSION_WARNING;
+    const tierLimits = subscriptionService.getTierLimits('FREE');
+    const dailyLimitMinutes = tierLimits.dailyStudyMinutes;
+    const warningMinutes = tierLimits.warningBeforeKickMinutes;
 
-    // Warning timeout (55 minutes)
-    const warningTimeout = setTimeout(() => {
-      io.to(socketId).emit('session-warning', {
-        message: 'Bạn còn 5 phút trong phiên học miễn phí. Nâng cấp HOCA+ để học không giới hạn!',
-        remainingMinutes: 5
-      });
-
-      // Also send as system chat message
-      io.to(socketId).emit('chat-message', {
-        userId: 'system',
-        displayName: 'System',
-        message: '⚠️ Còn 5 phút! Phiên học miễn phí sắp kết thúc. Nâng cấp HOCA+ để học không giới hạn.',
-        timestamp: new Date().toISOString()
-      });
-    }, warningTime);
-
-    // Kick timeout (60 minutes)
-    const kickTimeout = setTimeout(async () => {
-      // Force leave room
+    // Check every 30 seconds
+    const checkInterval = setInterval(async () => {
       try {
-        await leaveRoom(roomId, uid);
-      } catch (e) {
-        console.error('Error leaving room on session timeout:', e);
+        const user = await User.findById(uid);
+        if (!user) {
+          clearFreeUserTracker(uid);
+          return;
+        }
+
+        const timeStatus = subscriptionService.getDailyStudyTimeStatus(user);
+
+        // Send remaining time to client
+        io.to(socketId).emit('time-status', {
+          remainingMinutes: timeStatus.remainingMinutes,
+          dailyLimitMinutes,
+          shouldWarn: timeStatus.shouldWarn
+        });
+
+        // Warning (5 minutes before limit)
+        if (timeStatus.shouldWarn && !freeUserTimeTrackers[uid]?.warningSent) {
+          io.to(socketId).emit('session-warning', {
+            message: `Bạn còn ${timeStatus.remainingMinutes} phút trong giới hạn ${dailyLimitMinutes / 60} giờ/ngày. Nâng cấp HOCA+ để học không giới hạn!`,
+            remainingMinutes: timeStatus.remainingMinutes
+          });
+
+          io.to(socketId).emit('chat-message', {
+            userId: 'system',
+            displayName: 'System',
+            message: `⚠️ Còn ${timeStatus.remainingMinutes} phút! Bạn sắp hết giới hạn học miễn phí hôm nay. Nâng cấp HOCA+ để học không giới hạn.`,
+            timestamp: new Date().toISOString()
+          });
+
+          if (freeUserTimeTrackers[uid]) {
+            freeUserTimeTrackers[uid].warningSent = true;
+          }
+        }
+
+        // Time's up - kick user
+        if (timeStatus.shouldKick) {
+          // Force leave room
+          try {
+            await leaveRoom(roomId, uid);
+          } catch (e) {
+            console.error('Error leaving room on daily limit:', e);
+          }
+
+          // Notify the user
+          io.to(socketId).emit('session-expired', {
+            message: `Bạn đã sử dụng hết ${dailyLimitMinutes / 60} giờ học miễn phí hôm nay. Nâng cấp HOCA+ để học không giới hạn!`,
+            reason: 'DAILY_LIMIT_REACHED'
+          });
+
+          // Emit leave to others
+          io.to(roomId).emit('user-left', { userId: uid, socketId, reason: 'daily_limit' });
+
+          // Force disconnect from room
+          const targetSocket = io.sockets.sockets.get(socketId);
+          if (targetSocket) {
+            targetSocket.leave(roomId);
+          }
+
+          // Clear tracker
+          clearFreeUserTracker(uid);
+
+          console.log(`FREE user ${uid} kicked from room ${roomId} - daily limit reached`);
+        }
+      } catch (err) {
+        console.error('Error in FREE user time tracker:', err);
       }
+    }, 30000); // Check every 30 seconds
 
-      // Notify the user they've been kicked
-      io.to(socketId).emit('session-expired', {
-        message: 'Phiên học miễn phí 60 phút đã kết thúc. Nâng cấp HOCA+ để học không giới hạn!',
-        reason: 'FREE_SESSION_LIMIT'
-      });
-
-      // Emit leave to others
-      io.to(roomId).emit('user-left', { userId: uid, socketId, reason: 'session_expired' });
-
-      // Force disconnect from room
-      const targetSocket = io.sockets.sockets.get(socketId);
-      if (targetSocket) {
-        targetSocket.leave(roomId);
-      }
-
-      // Clear timers
-      clearFreeUserTimers(uid);
-
-      console.log(`FREE user ${uid} auto-kicked from room ${roomId} after 60 minutes`);
-    }, FREE_SESSION_DURATION);
-
-    freeUserSessionTimers[uid] = {
-      warningTimeout,
-      kickTimeout,
+    freeUserTimeTrackers[uid] = {
+      checkInterval,
       roomId,
       socketId,
-      startTime: Date.now()
+      startTime: Date.now(),
+      warningSent: false
     };
 
-    console.log(`Started 60-minute session timer for FREE user ${uid}`);
+    console.log(`Started daily time tracker for FREE user ${uid}`);
   };
 
   // Helper to switch phases
@@ -149,7 +174,7 @@ const registerRoomHandlers = (io, socket) => {
     try {
       if (!roomId) throw new Error('Room ID is required');
 
-      await joinRoom(roomId, userId, password);
+      const result = await joinRoom(roomId, userId, password);
 
       socket.join(roomId);
       socket.to(roomId).emit('user-joined', {
@@ -162,16 +187,33 @@ const registerRoomHandlers = (io, socket) => {
         }
       });
 
-      // Start FREE user session timer if applicable
+      // Send room info to the joining user (includes owner for close button)
+      const room = await Room.findById(roomId).populate('owner', '_id displayName');
+      if (room) {
+        socket.emit('room-info', {
+          roomId: room._id,
+          name: room.name,
+          ownerId: room.owner?._id?.toString(),
+          ownerName: room.owner?.displayName,
+          maxParticipants: room.maxParticipants,
+          isPublic: room.isPublic,
+          timerMode: room.timerMode
+        });
+      }
+
+      // Start FREE user daily time tracker if applicable
       const tier = socket.user.subscriptionTier || 'FREE';
       if (tier === 'FREE' && socket.user.role !== 'ADMIN') {
-        startFreeUserSessionTimer(userId, roomId, socket.id);
+        await startFreeUserTimeTracker(userId, roomId, socket.id);
+
+        const tierLimits = subscriptionService.getTierLimits('FREE');
 
         // Send session info to client
         socket.emit('session-info', {
           tier: 'FREE',
-          sessionDurationMinutes: 60,
-          warningAtMinutes: 55,
+          dailyLimitMinutes: tierLimits.dailyStudyMinutes,
+          remainingMinutes: result.remainingMinutes,
+          warningBeforeMinutes: tierLimits.warningBeforeKickMinutes,
           startTime: Date.now()
         });
       }
@@ -195,8 +237,8 @@ const registerRoomHandlers = (io, socket) => {
   });
 
   socket.on('leave-room', async ({ roomId }) => {
-    // Clear FREE user timers when leaving
-    clearFreeUserTimers(userId);
+    // Clear FREE user tracker when leaving
+    clearFreeUserTracker(userId);
     await handleLeave(roomId);
   });
 
@@ -218,6 +260,9 @@ const registerRoomHandlers = (io, socket) => {
   });
 
   socket.on('disconnecting', () => {
+    // Clear FREE user tracker on disconnect
+    clearFreeUserTracker(userId);
+
     const rooms = [...socket.rooms];
     rooms.forEach(roomId => {
       if (roomId !== socket.id) handleLeave(roomId);

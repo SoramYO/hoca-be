@@ -19,12 +19,20 @@ const authenticateUser = async (email, password) => {
   return user;
 };
 
+const rankService = require('./rank.service');
+
 const getUserProfile = async (userId) => {
   const user = await User.findById(userId).populate('badges');
   if (!user) {
     throw new Error('User not found');
   }
-  return user;
+
+  // Calculate and attach rank
+  const rank = await rankService.calculateUserRank(user.totalStudyMinutes);
+  const userObj = user.toObject();
+  userObj.rank = rank;
+
+  return userObj;
 };
 
 const updateUserProfile = async (userId, updateData) => {
@@ -402,6 +410,69 @@ const updateVirtualBackground = async (userId, backgroundData) => {
   return user;
 };
 
+/**
+ * Get weekly study activity for a user
+ * Returns study minutes per day for the last 7 days
+ */
+const getWeeklyActivity = async (userId) => {
+  const StudySession = require('../models/StudySession');
+
+  // Get the start of 7 days ago (midnight)
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - 6);
+  startDate.setHours(0, 0, 0, 0);
+
+  // Aggregate study sessions by day
+  const sessions = await StudySession.aggregate([
+    {
+      $match: {
+        user: require('mongoose').Types.ObjectId.createFromHexString(userId),
+        startTime: { $gte: startDate },
+        duration: { $gt: 0 }
+      }
+    },
+    {
+      $group: {
+        _id: {
+          year: { $year: '$startTime' },
+          month: { $month: '$startTime' },
+          day: { $dayOfMonth: '$startTime' }
+        },
+        totalMinutes: { $sum: '$duration' }
+      }
+    },
+    {
+      $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
+    }
+  ]);
+
+  // Build the result array for the last 7 days
+  const result = [];
+  const dayNames = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+
+  for (let i = 6; i >= 0; i--) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    date.setHours(0, 0, 0, 0);
+
+    const dayData = sessions.find(s =>
+      s._id.year === date.getFullYear() &&
+      s._id.month === date.getMonth() + 1 &&
+      s._id.day === date.getDate()
+    );
+
+    result.push({
+      date: date.toISOString().split('T')[0],
+      dayName: dayNames[date.getDay()],
+      minutes: dayData ? dayData.totalMinutes : 0,
+      hours: dayData ? Math.round((dayData.totalMinutes / 60) * 10) / 10 : 0,
+      isToday: i === 0
+    });
+  }
+
+  return result;
+};
+
 module.exports = {
   createUser,
   authenticateUser,
@@ -412,5 +483,6 @@ module.exports = {
   trackStudyTime,
   getLeaderboard,
   recoverStreak,
-  updateVirtualBackground
+  updateVirtualBackground,
+  getWeeklyActivity
 };
