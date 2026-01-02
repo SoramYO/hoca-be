@@ -1,4 +1,5 @@
 const Badge = require('../models/Badge');
+const { getUserBadgesWithProgress, checkAndUnlockBadges } = require('../services/badge.service');
 
 const createBadge = async (req, reply) => {
     try {
@@ -33,6 +34,33 @@ const getAllBadges = async (req, reply) => {
     }
 };
 
+/**
+ * Get all badges with user's progress and earned status
+ */
+const getUserBadges = async (req, reply) => {
+    try {
+        const userId = req.user._id;
+        const result = await getUserBadgesWithProgress(userId);
+        reply.send(result);
+    } catch (error) {
+        reply.code(400).send({ message: error.message });
+    }
+};
+
+/**
+ * Manually trigger badge check (useful for testing or after bulk updates)
+ */
+const checkBadges = async (req, reply) => {
+    try {
+        const userId = req.user._id;
+        const io = req.server.io; // Get socket.io instance from server
+        const result = await checkAndUnlockBadges(userId, io);
+        reply.send(result);
+    } catch (error) {
+        reply.code(400).send({ message: error.message });
+    }
+};
+
 const updateBadge = async (req, reply) => {
     try {
         const { id } = req.params;
@@ -62,6 +90,9 @@ const deleteBadge = async (req, reply) => {
 module.exports = {
     createBadge,
     getAllBadges,
+    getUserBadges,
+    checkBadges,
     updateBadge,
     deleteBadge
 };
+

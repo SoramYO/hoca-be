@@ -36,6 +36,7 @@ const adminRoutes = async (fastify, options) => {
 
   // Revenue
   fastify.get('/revenue/stats', adminController.getRevenueStats);
+  fastify.get('/revenue/transactions', adminController.getAllTransactions);
 
   // Analytics
   fastify.get('/analytics', adminController.getAnalytics);

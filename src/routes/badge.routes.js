@@ -2,8 +2,14 @@ const badgeController = require('../controllers/badge.controller');
 const { protect, admin } = require('../middlewares/auth.middleware');
 
 const badgeRoutes = async (fastify, options) => {
-    // Public/User: Get all badges
+    // Public: Get all badges (for display)
     fastify.get('/', badgeController.getAllBadges);
+
+    // User: Get badges with progress (requires auth)
+    fastify.get('/me', { preHandler: [protect] }, badgeController.getUserBadges);
+
+    // User: Manually check and unlock badges
+    fastify.post('/check', { preHandler: [protect] }, badgeController.checkBadges);
 
     // Admin: Manage badges
     fastify.post('/', { preHandler: [protect, admin] }, badgeController.createBadge);
@@ -12,3 +18,4 @@ const badgeRoutes = async (fastify, options) => {
 };
 
 module.exports = badgeRoutes;
+

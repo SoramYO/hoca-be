@@ -171,60 +171,155 @@ const warnUser = async (req, reply) => {
   }
 };
 
-// Revenue Management (Real Data)
+// Revenue Management (Real Data with Timeframe filter)
 const getRevenueStats = async (req, reply) => {
   try {
-    // 1. Total Revenue (All time)
+    const { timeframe = 'month' } = req.query; // day, week, month, year, all
+
+    let startDate;
+    const now = moment();
+
+    switch (timeframe) {
+      case 'day':
+        startDate = now.clone().startOf('day');
+        break;
+      case 'week':
+        startDate = now.clone().startOf('week'); // or subtract 7 days
+        break;
+      case 'month':
+        startDate = now.clone().startOf('month');
+        break;
+      case 'year':
+        startDate = now.clone().startOf('year');
+        break;
+      case 'all':
+      default:
+        startDate = null; // No date filter
+        break;
+    }
+
+    const matchStage = { status: 'COMPLETED' };
+    if (startDate) {
+      matchStage.createdAt = { $gte: startDate.toDate() };
+    }
+
+    // 1. Total Revenue
     const totalRevResult = await Transaction.aggregate([
-      { $match: { status: 'COMPLETED' } },
+      { $match: matchStage },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const totalRevenue = totalRevResult[0]?.total || 0;
 
-    // 2. Premium Sales (All time)
+    // 2. Premium Sales
     const premiumRevResult = await Transaction.aggregate([
-      { $match: { status: 'COMPLETED', type: 'PREMIUM_SUBSCRIPTION' } },
+      { $match: { ...matchStage, type: 'PREMIUM_SUBSCRIPTION' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const premiumSales = premiumRevResult[0]?.total || 0;
 
     // 3. Ad Revenue
-    // Currently no Ad model, returning 0 for now.
-    const adRevenue = 0;
+    const adRevenue = 0; // Placeholder
 
-    // 4. ARPU (Total Revenue / Total Users)
+    // 4. ARPU (Total Revenue of period / Active Users in period)
+    // For simplicity, using total users count, but technically should count users active in this period.
     const totalUsers = await User.countDocuments();
     const arpu = totalUsers > 0 ? Math.round(totalRevenue / totalUsers) : 0;
 
-    // 5. Chart Data (Last 7 days)
-    const chartData = [];
-    for (let i = 6; i >= 0; i--) {
-      const date = moment().subtract(i, 'days');
-      const start = date.startOf('day').toDate();
-      const end = date.endOf('day').toDate();
+    // 5. Chart Data
+    // Adjust chart range based on timeframe
+    let chartDays = 7;
+    let chartUnit = 'days';
+    let dateFormat = 'DD/MM';
 
-      const dayStats = await Transaction.aggregate([
-        { $match: { status: 'COMPLETED', createdAt: { $gte: start, $lte: end } } },
-        { $group: { _id: '$type', total: { $sum: '$amount' } } }
-      ]);
-
-      const premium = dayStats.find(s => s._id === 'PREMIUM_SUBSCRIPTION')?.total || 0;
-      const ad = 0;
-
-      chartData.push({
-        day: date.format('DD/MM'),
-        premium,
-        ad
-      });
+    if (timeframe === 'day') {
+      chartDays = 24; // Hourly? simplified to just show today for now or similar.
+      // For 'day', maybe show last 24h? Or just 1 bar?
+      // Let's keep 7 days for context if 'day' is selected? 
+      // Or if 'day' is selected, maybe show hours of today.
+      // Let's stick to "Last N days" strategy for chart regardless of filter usually, 
+      // OR match the filter. 
+      // The UI seems to want trend. 
+      // If 'year', show months. If 'month', show weeks/days.
+      // To keep it simple and safe:
+      chartDays = 12; // default
     }
 
-    // 6. Recent Transactions
-    const transactions = await Transaction.find()
+    const chartData = [];
+
+    // Simple Chart Logic: always show last 7-10 data points relevant to timeframe
+    if (timeframe === 'year') {
+      // Last 6 months (reduced from 12 for better chart display)
+      for (let i = 5; i >= 0; i--) {
+        const date = moment().subtract(i, 'months');
+        const start = date.clone().startOf('month').toDate();
+        const end = date.clone().endOf('month').toDate();
+
+        const dayStats = await Transaction.aggregate([
+          { $match: { status: 'COMPLETED', createdAt: { $gte: start, $lte: end } } },
+          { $group: { _id: '$type', total: { $sum: '$amount' } } }
+        ]);
+        const premium = dayStats.find(s => s._id === 'PREMIUM_SUBSCRIPTION')?.total || 0;
+        chartData.push({ day: date.format('MMM'), premium, ad: 0 });
+      }
+    } else if (timeframe === 'month') {
+      // Last 4 weeks (aggregate weekly for better display)
+      for (let i = 3; i >= 0; i--) {
+        const weekEnd = moment().subtract(i, 'weeks').endOf('week');
+        const weekStart = moment().subtract(i, 'weeks').startOf('week');
+
+        const weekStats = await Transaction.aggregate([
+          { $match: { status: 'COMPLETED', createdAt: { $gte: weekStart.toDate(), $lte: weekEnd.toDate() } } },
+          { $group: { _id: '$type', total: { $sum: '$amount' } } }
+        ]);
+        const premium = weekStats.find(s => s._id === 'PREMIUM_SUBSCRIPTION')?.total || 0;
+        chartData.push({ day: `Tuần ${4 - i}`, premium, ad: 0 });
+      }
+    } else if (timeframe === 'week') {
+      // Last 7 days
+      for (let i = 6; i >= 0; i--) {
+        const date = moment().subtract(i, 'days');
+        const start = date.clone().startOf('day').toDate();
+        const end = date.clone().endOf('day').toDate();
+
+        const dayStats = await Transaction.aggregate([
+          { $match: { status: 'COMPLETED', createdAt: { $gte: start, $lte: end } } },
+          { $group: { _id: '$type', total: { $sum: '$amount' } } }
+        ]);
+        const premium = dayStats.find(s => s._id === 'PREMIUM_SUBSCRIPTION')?.total || 0;
+        chartData.push({ day: date.format('DD/MM'), premium, ad: 0 });
+      }
+    } else {
+      // Day: Last 8 time blocks (every 3 hours for today)
+      for (let i = 7; i >= 0; i--) {
+        const blockEnd = moment().subtract(i * 3, 'hours');
+        const blockStart = blockEnd.clone().subtract(3, 'hours');
+
+        const blockStats = await Transaction.aggregate([
+          { $match: { status: 'COMPLETED', createdAt: { $gte: blockStart.toDate(), $lte: blockEnd.toDate() } } },
+          { $group: { _id: '$type', total: { $sum: '$amount' } } }
+        ]);
+        const premium = blockStats.find(s => s._id === 'PREMIUM_SUBSCRIPTION')?.total || 0;
+        chartData.push({ day: blockEnd.format('HH:mm'), premium, ad: 0 });
+      }
+    }
+
+    // 6. Recent Transactions (filtered by date)
+    const txQuery = { status: 'COMPLETED' }; // Show only completed? UI showed 'status' col, so maybe all?
+    // The UI shows status column, so let's show all valid transactions but filtered by date if needed.
+    // The matchStage above filtered by date. Let's reuse it but strictly for 'status: COMPLETED' might not be desired for list.
+    // List should probably show ALL attempts if it's "Recent Transactions".
+    // But if we are filtering "Revenue", we usually only care about successful money.
+    // Let's stick to matchStage (COMPLETED) for "Revenue Page" transactions list to correspond to the numbers.
+    // OR we can relax it. Let's relax status for list but apply date.
+
+    const listQuery = {};
+    if (startDate) listQuery.createdAt = { $gte: startDate.toDate() };
+
+    const transactions = await Transaction.find(listQuery)
       .sort({ createdAt: -1 })
       .limit(10)
       .populate('user', 'displayName');
 
-    // Format transactions for FE
     const formattedTxns = transactions.map(tx => ({
       id: tx.txnRef || tx._id.toString().substring(0, 8),
       type: tx.type,
@@ -508,6 +603,49 @@ const deleteRoomCategory = async (req, reply) => {
   }
 };
 
+// Transaction History (Pagination)
+const getAllTransactions = async (req, reply) => {
+  try {
+    const { page = 1, limit = 20, search, status, type } = req.query;
+    const query = {};
+
+    if (search) {
+      // Search by Transaction Ref or User Name (need lookup for user name search, simplified to txnRef for now)
+      // Or if user search is needed, we need aggregate or find user first.
+      query.txnRef = { $regex: search, $options: 'i' };
+    }
+
+    if (status) query.status = status;
+    if (type) query.type = type;
+
+    const transactions = await Transaction.find(query)
+      .populate('user', 'displayName email avatar')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+
+    const total = await Transaction.countDocuments(query);
+
+    reply.send({
+      transactions: transactions.map(tx => ({
+        id: tx.txnRef,
+        _id: tx._id,
+        user: tx.user,
+        amount: tx.amount,
+        type: tx.type,
+        status: tx.status,
+        date: tx.createdAt,
+        description: tx.description
+      })),
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / limit)
+    });
+  } catch (error) {
+    reply.code(500).send({ message: error.message });
+  }
+};
+
 module.exports = {
   getAllUsers,
   toggleBlockUser,
@@ -517,6 +655,7 @@ module.exports = {
   getUserDetails,
   warnUser,
   getRevenueStats,
+  getAllTransactions, // Export new function
   getAdStats,
   getAnalytics,
   createAdminRoom,

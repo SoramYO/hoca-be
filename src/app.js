@@ -14,6 +14,7 @@ require('./models/SystemConfig');
 require('./models/SystemConfig');
 require('./models/Message');
 require('./models/Rank');
+require('./models/Notification');
 const logger = require('./middlewares/logger.middleware');
 const buildApp = async () => {
   const app = fastify();
@@ -69,6 +70,7 @@ const buildApp = async () => {
   app.register(require('./routes/quote.routes'), { prefix: '/api/quotes' });
   app.register(require('./routes/upload.routes'), { prefix: '/api/upload' });
   app.register(require('./routes/rank.routes'), { prefix: '/api/ranks' });
+  app.register(require('./routes/notification.routes'), { prefix: '/api/notifications' });
 
 
   return app;

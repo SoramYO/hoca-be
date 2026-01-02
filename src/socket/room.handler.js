@@ -2,6 +2,8 @@ const Room = require('../models/Room');
 const User = require('../models/User');
 const { joinRoom, leaveRoom } = require('../services/room.service');
 const subscriptionService = require('../services/subscription.service');
+const { checkAndUnlockBadges } = require('../services/badge.service');
+
 
 // Timer State Management
 // roomId -> { timeout: NodeJS.Timeout, status, startTime, duration, mode, endTime }
@@ -274,6 +276,16 @@ const registerRoomHandlers = (io, socket) => {
       await leaveRoom(roomId, userId);
       socket.leave(roomId);
       socket.to(roomId).emit('user-left', { userId, socketId: socket.id });
+
+      // Check and unlock badges after leaving room (study time was recorded)
+      try {
+        const result = await checkAndUnlockBadges(userId, io);
+        if (result.newBadges && result.newBadges.length > 0) {
+          console.log(`User ${userId} unlocked ${result.newBadges.length} new badge(s)`);
+        }
+      } catch (badgeErr) {
+        console.error('Error checking badges on leave:', badgeErr);
+      }
 
       // Note: We do NOT stop the timer if users leave. 
       // It continues running as long as the server is up (or until explicit stop).
