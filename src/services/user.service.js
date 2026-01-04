@@ -32,6 +32,35 @@ const getUserProfile = async (userId) => {
   const userObj = user.toObject();
   userObj.rank = rank;
 
+  // Visual Reset for Daily Stats (UI only)
+  // The DB updates when they actually perform the action, but UI should show 0 correctly on new day
+  const now = new Date();
+  
+  const isSameDay = (date1, date2) => {
+    if (!date1 || !date2) return false;
+    const d1 = new Date(date1);
+    const d2 = new Date(date2);
+    return d1.getDate() === d2.getDate() &&
+           d1.getMonth() === d2.getMonth() &&
+           d1.getFullYear() === d2.getFullYear();
+  };
+
+  if (!isSameDay(now, user.lastStudyDate)) {
+    userObj.todayStudyMinutes = 0;
+  }
+
+  if (!isSameDay(now, user.lastSessionDate)) {
+    userObj.todaySessionCount = 0;
+  }
+
+  if (!isSameDay(now, user.lastRoomDate)) {
+    userObj.todayRoomMinutes = 0;
+  }
+
+  if (!isSameDay(now, user.lastRoomCreatedDate)) {
+    userObj.todayRoomCreatedCount = 0;
+  }
+
   return userObj;
 };
 
