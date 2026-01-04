@@ -37,8 +37,24 @@ const vnpayReturn = async (req, reply) => {
   reply.send({ message: "Legacy endpoint" });
 };
 
+const getMyTransactions = async (req, reply) => {
+  try {
+    const { page, limit } = req.query;
+    const result = await paymentService.getUserTransactions(
+      req.user.id,
+      page ? parseInt(page) : 1,
+      limit ? parseInt(limit) : 10
+    );
+    reply.send(result);
+  } catch (error) {
+    console.error(error);
+    reply.code(500).send({ message: error.message });
+  }
+};
+
 module.exports = {
   createPayment,
   verifyPayment,
-  vnpayReturn
+  vnpayReturn,
+  getMyTransactions
 };

@@ -117,10 +117,31 @@ const completeTransaction = async (txnRef, providerTransactionNo) => {
   }
 
   return true;
+
+};
+
+const getUserTransactions = async (userId, page = 1, limit = 10) => {
+  const skip = (page - 1) * limit;
+  const transactions = await Transaction.find({ user: userId })
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .populate('plan', 'name price currency durationDays');
+
+  const total = await Transaction.countDocuments({ user: userId });
+
+  return {
+    transactions,
+    total,
+    page: Number(page),
+    totalPages: Math.ceil(total / limit)
+  };
 };
 
 module.exports = {
   createPaymentUrl,
   verifyReturnUrl,
-  completeTransaction
+  completeTransaction,
+  getUserTransactions
 };
+
