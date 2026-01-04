@@ -35,14 +35,14 @@ const getUserProfile = async (userId) => {
   // Visual Reset for Daily Stats (UI only)
   // The DB updates when they actually perform the action, but UI should show 0 correctly on new day
   const now = new Date();
-  
+
   const isSameDay = (date1, date2) => {
     if (!date1 || !date2) return false;
     const d1 = new Date(date1);
     const d2 = new Date(date2);
     return d1.getDate() === d2.getDate() &&
-           d1.getMonth() === d2.getMonth() &&
-           d1.getFullYear() === d2.getFullYear();
+      d1.getMonth() === d2.getMonth() &&
+      d1.getFullYear() === d2.getFullYear();
   };
 
   if (!isSameDay(now, user.lastStudyDate)) {
@@ -301,18 +301,33 @@ const getLeaderboard = async () => {
 };
 
 const getUserById = async (userId) => {
+  const StudySession = require('../models/StudySession');
   const user = await User.findById(userId).select('-password');
   if (!user) {
     throw new Error('User not found');
   }
-  // Mock stats for now as we don't have full aggregation yet
+
+  // Real Stats aggregation
+  const totalSessions = await StudySession.countDocuments({ user: userId });
+
+  // Get Recent Sessions
+  const recentSessions = await StudySession.find({ user: userId })
+    .sort({ createdAt: -1 })
+    .limit(5)
+    .populate('room', 'name');
+
   const stats = {
-    totalDuration: 2720, // minutes (approx 45h 20m)
-    totalSessions: 142,
-    currentStreak: user.streak || 0, // Use real streak if available
-    avgScore: 88
+    totalDuration: user.totalStudyMinutes || 0,
+    totalSessions,
+    currentStreak: user.currentStreak || 0,
+    // avgScore not supported by data model yet
   };
-  return { ...user.toObject(), stats };
+
+  return {
+    ...user.toObject(),
+    stats,
+    recentSessions
+  };
 };
 
 const recoverStreak = async (userId) => {

@@ -185,7 +185,8 @@ const registerRoomHandlers = (io, socket) => {
         userInfo: {
           displayName: socket.user.displayName,
           avatar: socket.user.avatar,
-          subscriptionTier: socket.user.subscriptionTier
+          subscriptionTier: socket.user.subscriptionTier,
+          rank: socket.user.rank
         }
       });
 
@@ -350,7 +351,8 @@ const registerRoomHandlers = (io, socket) => {
       userInfo: {
         userId: socket.user.id,
         displayName: socket.user.displayName,
-        avatar: socket.user.avatar
+        avatar: socket.user.avatar,
+        rank: socket.user.rank
       }
     });
   });

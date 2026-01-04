@@ -12,7 +12,12 @@ const createRoom = async (req, reply) => {
 
 const getRooms = async (req, reply) => {
   try {
-    const rooms = await roomService.getPublicRooms();
+    const { search } = req.query;
+    const query = {};
+    if (search) {
+      query.name = { $regex: search, $options: 'i' };
+    }
+    const rooms = await roomService.getPublicRooms(query);
     reply.send(rooms);
   } catch (error) {
     reply.code(500).send({ message: error.message });

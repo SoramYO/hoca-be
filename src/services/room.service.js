@@ -152,6 +152,10 @@ const joinRoom = async (roomId, userId, password) => {
   const user = await User.findById(userId);
   if (!user) throw new Error('User not found');
 
+  if (user.isLocked || user.isBlocked) {
+    throw new Error('Tài khoản của bạn đang bị khóa. Vui lòng liên hệ quản trị viên.');
+  }
+
   // Reset daily stats if new day
   await resetDailyStatsIfNeeded(user);
 

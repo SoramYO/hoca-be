@@ -35,6 +35,9 @@ const registerUser = async (userData) => {
 const loginUser = async ({ email, password }) => {
   // Check user
   const user = await User.findOne({ email }).select('+password');
+  if (user.isLocked) {
+    throw new Error('User is locked');
+  }
   if (!user) {
     throw new Error('Invalid credentials');
   }
@@ -202,8 +205,13 @@ const googleLogin = async (token) => {
       googleId,
       avatar: picture,
       // Random password for google users
+      // Random password for google users
       password: crypto.randomBytes(16).toString('hex')
     });
+  }
+
+  if (user.isLocked || user.isBlocked) {
+    throw new Error('User is locked');
   }
 
   const tokenJWT = signToken(user._id, user.role, user.subscriptionTier);
