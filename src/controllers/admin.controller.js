@@ -179,12 +179,13 @@ const getRevenueStats = async (req, reply) => {
     let startDate;
     const now = moment();
 
+    // Determine startDate based on timeframe for Charts & Detail views
     switch (timeframe) {
       case 'day':
         startDate = now.clone().startOf('day');
         break;
       case 'week':
-        startDate = now.clone().startOf('week'); // or subtract 7 days
+        startDate = now.clone().startOf('week');
         break;
       case 'month':
         startDate = now.clone().startOf('month');
@@ -203,53 +204,85 @@ const getRevenueStats = async (req, reply) => {
       matchStage.createdAt = { $gte: startDate.toDate() };
     }
 
-    // 1. Total Revenue
+    // --- 1. Top Cards Aggregation (Always calculate All, Year, Month, Week) ---
+    const startOfYear = moment().startOf('year').toDate();
+    const startOfMonth = moment().startOf('month').toDate();
+    const startOfWeek = moment().startOf('week').toDate();
+
+    const [allTime, yearToDate, monthToDate, weekToDate] = await Promise.all([
+      // All Time
+      Transaction.aggregate([
+        { $match: { status: 'COMPLETED' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]),
+      // This Year
+      Transaction.aggregate([
+        { $match: { status: 'COMPLETED', createdAt: { $gte: startOfYear } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]),
+      // This Month
+      Transaction.aggregate([
+        { $match: { status: 'COMPLETED', createdAt: { $gte: startOfMonth } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]),
+      // This Week
+      Transaction.aggregate([
+        { $match: { status: 'COMPLETED', createdAt: { $gte: startOfWeek } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ])
+    ]);
+
+    const summary = {
+      all: allTime[0]?.total || 0,
+      year: yearToDate[0]?.total || 0,
+      month: monthToDate[0]?.total || 0,
+      week: weekToDate[0]?.total || 0
+    };
+
+    // --- 2. Filtered Stats (For specific timeframe ARPU, Charts, Pie) ---
+    // Total Revenue (Filtered)
     const totalRevResult = await Transaction.aggregate([
       { $match: matchStage },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const totalRevenue = totalRevResult[0]?.total || 0;
 
-    // 2. Premium Sales
+    // Premium Sales (Filtered)
     const premiumRevResult = await Transaction.aggregate([
       { $match: { ...matchStage, type: 'PREMIUM_SUBSCRIPTION' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const premiumSales = premiumRevResult[0]?.total || 0;
 
-    // 3. Ad Revenue
-    const adRevenue = 0; // Placeholder
+    // Ad Revenue (Filtered) - Placeholder logic as per original
+    const adRevenue = 0;
 
-    // 4. ARPU (Total Revenue of period / Active Users in period)
-    // For simplicity, using total users count, but technically should count users active in this period.
+    // ARPU (Filtered)
+    // For simplicity, using total users count.
     const totalUsers = await User.countDocuments();
     const arpu = totalUsers > 0 ? Math.round(totalRevenue / totalUsers) : 0;
 
-    // 5. Chart Data
-    // Adjust chart range based on timeframe
-    let chartDays = 7;
-    let chartUnit = 'days';
-    let dateFormat = 'DD/MM';
-
-    if (timeframe === 'day') {
-      chartDays = 24; // Hourly? simplified to just show today for now or similar.
-      // For 'day', maybe show last 24h? Or just 1 bar?
-      // Let's keep 7 days for context if 'day' is selected? 
-      // Or if 'day' is selected, maybe show hours of today.
-      // Let's stick to "Last N days" strategy for chart regardless of filter usually, 
-      // OR match the filter. 
-      // The UI seems to want trend. 
-      // If 'year', show months. If 'month', show weeks/days.
-      // To keep it simple and safe:
-      chartDays = 12; // default
-    }
-
+    // --- 3. Chart Data ---
     const chartData = [];
 
-    // Simple Chart Logic: always show last 7-10 data points relevant to timeframe
-    if (timeframe === 'year') {
-      // Last 6 months (reduced from 12 for better chart display)
-      for (let i = 5; i >= 0; i--) {
+    if (timeframe === 'all') {
+      // Group by Month (Last 12 months for visual limitation, or could be 'Year' if very long)
+      // Let's show last 12 months
+      for (let i = 11; i >= 0; i--) {
+        const date = moment().subtract(i, 'months');
+        const start = date.clone().startOf('month').toDate();
+        const end = date.clone().endOf('month').toDate();
+
+        const monthStats = await Transaction.aggregate([
+          { $match: { status: 'COMPLETED', createdAt: { $gte: start, $lte: end } } },
+          { $group: { _id: '$type', total: { $sum: '$amount' } } }
+        ]);
+        const premium = monthStats.find(s => s._id === 'PREMIUM_SUBSCRIPTION')?.total || 0;
+        chartData.push({ day: date.format('MM/YYYY'), premium, ad: 0 });
+      }
+    } else if (timeframe === 'year') {
+      // Last 6-12 months
+      for (let i = 11; i >= 0; i--) {
         const date = moment().subtract(i, 'months');
         const start = date.clone().startOf('month').toDate();
         const end = date.clone().endOf('month').toDate();
@@ -262,7 +295,7 @@ const getRevenueStats = async (req, reply) => {
         chartData.push({ day: date.format('MMM'), premium, ad: 0 });
       }
     } else if (timeframe === 'month') {
-      // Last 4 weeks (aggregate weekly for better display)
+      // Last 4-5 weeks
       for (let i = 3; i >= 0; i--) {
         const weekEnd = moment().subtract(i, 'weeks').endOf('week');
         const weekStart = moment().subtract(i, 'weeks').startOf('week');
@@ -289,7 +322,7 @@ const getRevenueStats = async (req, reply) => {
         chartData.push({ day: date.format('DD/MM'), premium, ad: 0 });
       }
     } else {
-      // Day: Last 8 time blocks (every 3 hours for today)
+      // Day: Last 8 blocks
       for (let i = 7; i >= 0; i--) {
         const blockEnd = moment().subtract(i * 3, 'hours');
         const blockStart = blockEnd.clone().subtract(3, 'hours');
@@ -303,16 +336,8 @@ const getRevenueStats = async (req, reply) => {
       }
     }
 
-    // 6. Recent Transactions (filtered by date)
-    const txQuery = { status: 'COMPLETED' }; // Show only completed? UI showed 'status' col, so maybe all?
-    // The UI shows status column, so let's show all valid transactions but filtered by date if needed.
-    // The matchStage above filtered by date. Let's reuse it but strictly for 'status: COMPLETED' might not be desired for list.
-    // List should probably show ALL attempts if it's "Recent Transactions".
-    // But if we are filtering "Revenue", we usually only care about successful money.
-    // Let's stick to matchStage (COMPLETED) for "Revenue Page" transactions list to correspond to the numbers.
-    // OR we can relax it. Let's relax status for list but apply date.
-
-    const listQuery = {};
+    // --- 4. Recent Transactions (filtered) ---
+    const listQuery = { status: 'COMPLETED' };
     if (startDate) listQuery.createdAt = { $gte: startDate.toDate() };
 
     const transactions = await Transaction.find(listQuery)
@@ -330,6 +355,7 @@ const getRevenueStats = async (req, reply) => {
     }));
 
     reply.send({
+      summary,
       totalRevenue,
       premiumSales,
       adRevenue,
