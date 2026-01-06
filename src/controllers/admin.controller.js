@@ -84,26 +84,50 @@ const getUserDetails = async (req, reply) => {
 // Analytics
 const getSystemStats = async (req, reply) => {
   try {
+    const { days, month, year, startDate: qStartDate, endDate: qEndDate } = req.query;
+    let filter = {};
+
+    // Construct Date Filter
+    if (qStartDate && qEndDate) {
+      filter.createdAt = {
+        $gte: moment(qStartDate).startOf('day').toDate(),
+        $lte: moment(qEndDate).endOf('day').toDate()
+      };
+    } else if (month && year) {
+      const start = moment().year(year).month(month - 1).startOf('month');
+      const end = start.clone().endOf('month');
+      filter.createdAt = { $gte: start.toDate(), $lte: end.toDate() };
+    } else if (days) {
+      const start = moment().subtract(days, 'days').startOf('day');
+      filter.createdAt = { $gte: start.toDate() };
+    }
+
     const [totalUsers, totalRooms, totalRevenue] = await Promise.all([
-      User.countDocuments(),
-      Room.countDocuments(),
+      User.countDocuments(filter),
+      Room.countDocuments(filter),
       Transaction.aggregate([
-        { $match: { status: 'COMPLETED' } },
+        { $match: { status: 'COMPLETED', ...filter } },
         { $group: { _id: null, total: { $sum: '$amount' } } }
       ])
     ]);
 
     const revenue = totalRevenue.length > 0 ? totalRevenue[0].total : 0;
+    let growthFilter = {};
+    if (Object.keys(filter).length > 0) {
+      // If filter exists, count users in that filter
+      growthFilter = filter;
+    } else {
+      // Default to last 7 days
+      growthFilter = { createdAt: { $gte: moment().subtract(7, 'days').toDate() } };
+    }
 
-    // Recent Growth (Last 7 days)
-    const sevenDaysAgo = moment().subtract(7, 'days').toDate();
-    const newUsers = await User.countDocuments({ createdAt: { $gte: sevenDaysAgo } });
+    const newUsers = await User.countDocuments(growthFilter);
 
     reply.send({
       totalUsers,
       totalRooms,
       revenue,
-      newUsersLast7Days: newUsers
+      newUsersLast7Days: newUsers // This will match totalUsers if we use the same filter.
     });
   } catch (error) {
     reply.code(500).send({ message: error.message });
@@ -174,10 +198,134 @@ const warnUser = async (req, reply) => {
 // Revenue Management (Real Data with Timeframe filter)
 const getRevenueStats = async (req, reply) => {
   try {
-    const { timeframe = 'month' } = req.query; // day, week, month, year, all
+    const { timeframe = 'month', filterMonth, filterYear, startDate: queryStartDate, endDate: queryEndDate } = req.query; // day, week, month, year, all + custom filters
 
     let startDate;
+    let endDateFilter;
     const now = moment();
+
+    // Custom date range filter (from date - to date)
+    if (queryStartDate && queryEndDate) {
+      startDate = moment(queryStartDate).startOf('day');
+      endDateFilter = moment(queryEndDate).endOf('day');
+
+      const matchStage = { status: 'COMPLETED', createdAt: { $gte: startDate.toDate(), $lte: endDateFilter.toDate() } };
+
+      // Revenue by tier (MONTHLY, YEARLY, LIFETIME)
+      const revenueByTier = await Transaction.aggregate([
+        { $match: { ...matchStage, type: 'PREMIUM_SUBSCRIPTION' } },
+        { $lookup: { from: 'pricingplans', localField: 'plan', foreignField: '_id', as: 'planInfo' } },
+        { $unwind: { path: '$planInfo', preserveNullAndEmptyArrays: true } },
+        { $group: { _id: '$planInfo.tier', total: { $sum: '$amount' }, count: { $sum: 1 } } }
+      ]);
+
+      const tierRevenue = {
+        MONTHLY: revenueByTier.find(t => t._id === 'MONTHLY') || { total: 0, count: 0 },
+        YEARLY: revenueByTier.find(t => t._id === 'YEARLY') || { total: 0, count: 0 },
+        LIFETIME: revenueByTier.find(t => t._id === 'LIFETIME') || { total: 0, count: 0 }
+      };
+
+      const totalFiltered = await Transaction.aggregate([
+        { $match: matchStage },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]);
+
+      // Get chart data for date range
+      const days = endDateFilter.diff(startDate, 'days') + 1;
+      const chartData = [];
+      for (let i = 0; i < Math.min(days, 31); i++) {
+        const date = startDate.clone().add(i, 'days');
+        const dayStart = date.clone().startOf('day').toDate();
+        const dayEnd = date.clone().endOf('day').toDate();
+
+        const [premiumData, adData] = await Promise.all([
+          Transaction.aggregate([
+            { $match: { status: 'COMPLETED', type: 'PREMIUM_SUBSCRIPTION', createdAt: { $gte: dayStart, $lte: dayEnd } } },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+          ]),
+          Transaction.aggregate([
+            { $match: { status: 'COMPLETED', type: 'AD_REVENUE', createdAt: { $gte: dayStart, $lte: dayEnd } } },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+          ])
+        ]);
+
+        chartData.push({
+          day: date.format('DD/MM'),
+          premium: premiumData[0]?.total || 0,
+          ad: adData[0]?.total || 0
+        });
+      }
+
+      // Get transactions in date range
+      const transactions = await Transaction.find(matchStage)
+        .populate('user', 'displayName email')
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .lean();
+
+      const formattedTransactions = transactions.map(tx => ({
+        id: tx._id.toString().slice(-6).toUpperCase(),
+        date: tx.createdAt,
+        type: tx.type,
+        user: tx.user?.displayName || tx.user?.email || 'Unknown',
+        amount: tx.amount,
+        status: tx.status
+      }));
+
+      return reply.send({
+        startDate: queryStartDate,
+        endDate: queryEndDate,
+        totalRevenue: totalFiltered[0]?.total || 0,
+        tierRevenue,
+        summary: { all: 0, year: 0, month: totalFiltered[0]?.total || 0, week: 0 },
+        chartData,
+        premiumSales: totalFiltered[0]?.total || 0,
+        adRevenue: 0,
+        arpu: 0,
+        transactions: formattedTransactions
+      });
+    }
+
+    // Custom month/year filter
+    if (filterMonth && filterYear) {
+      startDate = moment().year(parseInt(filterYear)).month(parseInt(filterMonth) - 1).startOf('month');
+      const endDate = startDate.clone().endOf('month');
+
+      // Use custom date range
+      const matchStage = { status: 'COMPLETED', createdAt: { $gte: startDate.toDate(), $lte: endDate.toDate() } };
+
+      // Revenue by tier (MONTHLY, YEARLY, LIFETIME)
+      const revenueByTier = await Transaction.aggregate([
+        { $match: { ...matchStage, type: 'PREMIUM_SUBSCRIPTION' } },
+        { $lookup: { from: 'pricingplans', localField: 'plan', foreignField: '_id', as: 'planInfo' } },
+        { $unwind: { path: '$planInfo', preserveNullAndEmptyArrays: true } },
+        { $group: { _id: '$planInfo.tier', total: { $sum: '$amount' }, count: { $sum: 1 } } }
+      ]);
+
+      const tierRevenue = {
+        MONTHLY: revenueByTier.find(t => t._id === 'MONTHLY') || { total: 0, count: 0 },
+        YEARLY: revenueByTier.find(t => t._id === 'YEARLY') || { total: 0, count: 0 },
+        LIFETIME: revenueByTier.find(t => t._id === 'LIFETIME') || { total: 0, count: 0 }
+      };
+
+      const totalFiltered = await Transaction.aggregate([
+        { $match: matchStage },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]);
+
+      return reply.send({
+        filterMonth: parseInt(filterMonth),
+        filterYear: parseInt(filterYear),
+        totalRevenue: totalFiltered[0]?.total || 0,
+        tierRevenue,
+        summary: { all: 0, year: 0, month: totalFiltered[0]?.total || 0, week: 0 },
+        chartData: [],
+        premiumSales: totalFiltered[0]?.total || 0,
+        adRevenue: 0,
+        arpu: 0,
+        transactions: []
+      });
+    }
 
     // Determine startDate based on timeframe for Charts & Detail views
     switch (timeframe) {
@@ -261,6 +409,20 @@ const getRevenueStats = async (req, reply) => {
     // For simplicity, using total users count.
     const totalUsers = await User.countDocuments();
     const arpu = totalUsers > 0 ? Math.round(totalRevenue / totalUsers) : 0;
+
+    // --- Revenue by Tier (MONTHLY, YEARLY, LIFETIME) ---
+    const revenueByTier = await Transaction.aggregate([
+      { $match: { ...matchStage, type: 'PREMIUM_SUBSCRIPTION' } },
+      { $lookup: { from: 'pricingplans', localField: 'plan', foreignField: '_id', as: 'planInfo' } },
+      { $unwind: { path: '$planInfo', preserveNullAndEmptyArrays: true } },
+      { $group: { _id: '$planInfo.tier', total: { $sum: '$amount' }, count: { $sum: 1 } } }
+    ]);
+
+    const tierRevenue = {
+      MONTHLY: revenueByTier.find(t => t._id === 'MONTHLY') || { total: 0, count: 0 },
+      YEARLY: revenueByTier.find(t => t._id === 'YEARLY') || { total: 0, count: 0 },
+      LIFETIME: revenueByTier.find(t => t._id === 'LIFETIME') || { total: 0, count: 0 }
+    };
 
     // --- 3. Chart Data ---
     const chartData = [];
@@ -360,6 +522,7 @@ const getRevenueStats = async (req, reply) => {
       premiumSales,
       adRevenue,
       arpu,
+      tierRevenue,
       chartData,
       transactions: formattedTxns
     });
@@ -389,40 +552,64 @@ const getAdStats = async (req, reply) => {
 // Analytics Reports (Real Data)
 const getAnalytics = async (req, reply) => {
   try {
-    const { type } = req.query; // growth, engagement, technical
+    const { type, days, month, year, startDate: qStart, endDate: qEnd } = req.query;
     const StudySession = require('../models/StudySession');
 
+    // Determine Date Range
+    let start = moment().subtract(6, 'days').startOf('day'); // Default 7 days
+    let end = moment().endOf('day');
+
+    if (qStart && qEnd) {
+      start = moment(qStart).startOf('day');
+      end = moment(qEnd).endOf('day');
+    } else if (month && year) {
+      start = moment().year(year).month(month - 1).startOf('month');
+      end = start.clone().endOf('month');
+    } else if (days) {
+      start = moment().subtract(days - 1, 'days').startOf('day');
+      end = moment().endOf('day');
+    }
+
+    const diffDays = end.diff(start, 'days') + 1;
+    const getDaysArray = () => {
+      const arr = [];
+      for (let i = 0; i < diffDays; i++) {
+        arr.push(start.clone().add(i, 'days'));
+      }
+      return arr;
+    };
+
     if (type === 'growth') {
-      // Last 7 days user growth
+      const dates = getDaysArray();
       let newUsers = [];
       let labels = [];
-      for (let i = 6; i >= 0; i--) {
-        const date = moment().subtract(i, 'days');
+
+      for (const date of dates) {
+        const dStart = date.clone().startOf('day').toDate();
+        const dEnd = date.clone().endOf('day').toDate();
+
         const count = await User.countDocuments({
-          createdAt: {
-            $gte: date.startOf('day').toDate(),
-            $lte: date.endOf('day').toDate()
-          }
+          createdAt: { $gte: dStart, $lte: dEnd }
         });
         newUsers.push(count);
         labels.push(date.format('DD/MM'));
       }
 
       const totalNewUsers = await User.countDocuments({
-        createdAt: { $gte: moment().subtract(30, 'days').toDate() }
+        createdAt: { $gte: start.toDate(), $lte: end.toDate() }
       });
 
       const activeUsers = await User.countDocuments({
-        lastStudyDate: { $gte: moment().subtract(7, 'days').toDate() }
+        lastStudyDate: { $gte: start.toDate(), $lte: end.toDate() }
       });
 
       const mau = await User.countDocuments({
-        lastStudyDate: { $gte: moment().subtract(30, 'days').toDate() }
+        lastStudyDate: { $gte: start.clone().subtract(30, 'days').toDate(), $lte: end.toDate() }
       });
 
       return reply.send({
-        newUsers, // Array of counts
-        labels,   // Array of dates
+        newUsers,
+        labels,
         totalNewUsers,
         activeUsers,
         mau
@@ -430,48 +617,168 @@ const getAnalytics = async (req, reply) => {
     }
 
     if (type === 'study_hours') {
-      // Last 7 days study hours
+      const dates = getDaysArray();
       let studyHours = [];
       let labels = [];
-      for (let i = 6; i >= 0; i--) {
-        const date = moment().subtract(i, 'days');
-        const start = date.clone().startOf('day').toDate();
-        const end = date.clone().endOf('day').toDate();
+
+      for (const date of dates) {
+        const dStart = date.clone().startOf('day').toDate();
+        const dEnd = date.clone().endOf('day').toDate();
 
         const dayStats = await StudySession.aggregate([
-          { $match: { createdAt: { $gte: start, $lte: end } } },
+          { $match: { createdAt: { $gte: dStart, $lte: dEnd } } },
           { $group: { _id: null, totalMinutes: { $sum: '$duration' } } }
         ]);
 
-        const hours = dayStats[0]?.totalMinutes ? Math.round(dayStats[0].totalMinutes / 60) : 0;
-        studyHours.push(hours);
-        labels.push(date.format('ddd')); // Mon, Tue, etc.
+        const minutes = dayStats[0]?.totalMinutes || 0;
+        studyHours.push(Math.round(minutes / 60)); // hours
+        labels.push(date.format('ddd'));
       }
 
       return reply.send({
-        studyHours, // Array of hours per day
-        labels      // Day names
+        studyHours,
+        labels: diffDays > 10 ? dates.map(d => d.format('DD/MM')) : labels
       });
     }
 
     if (type === 'engagement') {
-      // Average Session Time
+      // Average Session Time (in period)
+      const periodMatch = { createdAt: { $gte: start.toDate(), $lte: end.toDate() } };
+
       const allSessions = await StudySession.aggregate([
+        { $match: periodMatch },
         { $group: { _id: null, avgDuration: { $avg: '$duration' } } }
       ]);
-      const avgMinutes = allSessions[0]?.avgDuration ? Math.round(allSessions[0].avgDuration / 60) : 0;
+      const avgMinutes = allSessions[0]?.avgDuration ? Math.round(allSessions[0].avgDuration) : 0;
 
-      // Retention Rate (Pseudo: Active Users / Total Users)
-      const totalUsers = await User.countDocuments();
-      const activeUsers = await User.countDocuments({
-        lastStudyDate: { $gte: moment().subtract(30, 'days').toDate() }
+      const anchorDate = end;
+
+      const totalUsers = await User.countDocuments({});
+
+      const activeUsersLast7Days = await User.countDocuments({
+        lastStudyDate: { $gte: anchorDate.clone().subtract(7, 'days').toDate(), $lte: anchorDate.toDate() }
       });
-      const retentionRate = totalUsers > 0 ? ((activeUsers / totalUsers) * 100).toFixed(1) : 0;
+      const activeUsersLast30Days = await User.countDocuments({
+        lastStudyDate: { $gte: anchorDate.clone().subtract(30, 'days').toDate(), $lte: anchorDate.toDate() }
+      });
+
+      const returningUsers = await User.countDocuments({
+        lastStudyDate: { $gte: anchorDate.clone().subtract(7, 'days').toDate(), $lte: anchorDate.toDate() },
+        createdAt: { $lte: anchorDate.clone().subtract(7, 'days').toDate() }
+      });
+
+      const retentionRate = activeUsersLast30Days > 0 ? ((returningUsers / activeUsersLast30Days) * 100).toFixed(1) : 0;
+
+      const retentionTrend = [];
+      for (let i = 3; i >= 0; i--) {
+        const chunkEnd = anchorDate.clone().subtract(i * 7, 'days');
+        const chunkStart = chunkEnd.clone().subtract(7, 'days');
+
+        const activeThisChunk = await User.countDocuments({
+          lastStudyDate: { $gte: chunkStart.toDate(), $lt: chunkEnd.toDate() }
+        });
+
+        const prevChunkStart = chunkStart.clone().subtract(7, 'days');
+        const activePrevChunk = await User.countDocuments({
+          lastStudyDate: { $gte: prevChunkStart.toDate(), $lt: chunkStart.toDate() }
+        });
+
+        const chunkRetention = activePrevChunk > 0 ? Math.round((activeThisChunk / activePrevChunk) * 100) : 0;
+
+        retentionTrend.push({
+          week: `Tuần -${i}`,
+          rate: Math.min(chunkRetention, 100),
+          activeUsers: activeThisChunk
+        });
+      }
 
       return reply.send({
         avgSessionTime: `${avgMinutes}m`,
         retentionRate: parseFloat(retentionRate),
-        cohortData: [] // TODO: Complex cohort analysis
+        totalUsers,
+        activeUsersLast7Days,
+        activeUsersLast30Days,
+        returningUsers,
+        retentionTrend,
+        cohortData: []
+      });
+    }
+
+    if (type === 'webcam_usage') {
+      const dates = getDaysArray();
+      const usageTrend = [];
+      const periodMatch = { createdAt: { $gte: start.toDate(), $lte: end.toDate() } };
+
+      for (const date of dates) {
+        const dStart = date.clone().startOf('day').toDate();
+        const dEnd = date.clone().endOf('day').toDate();
+
+        const dayStats = await StudySession.aggregate([
+          { $match: { createdAt: { $gte: dStart, $lte: dEnd } } },
+          {
+            $group: {
+              _id: null,
+              totalSessions: { $sum: 1 },
+              totalMinutes: { $sum: '$duration' },
+              uniqueUsers: { $addToSet: '$user' }
+            }
+          }
+        ]);
+
+        const stats = dayStats[0] || { totalSessions: 0, totalMinutes: 0, uniqueUsers: [] };
+
+        usageTrend.push({
+          date: date.format('DD/MM'),
+          dayName: date.format('ddd'),
+          sessions: stats.totalSessions,
+          totalMinutes: stats.totalMinutes,
+          totalHours: Math.round(stats.totalMinutes / 60 * 10) / 10,
+          uniqueUsers: stats.uniqueUsers?.length || 0
+        });
+      }
+
+      // Peak Hours in Period
+      const peakHoursData = await StudySession.aggregate([
+        { $match: periodMatch },
+        { $project: { hour: { $hour: '$createdAt' }, duration: 1 } },
+        { $group: { _id: '$hour', count: { $sum: 1 }, totalMinutes: { $sum: '$duration' } } },
+        { $sort: { _id: 1 } }
+      ]);
+
+      const peakHours = Array.from({ length: 24 }, (_, i) => {
+        const hourData = peakHoursData.find(h => h._id === i);
+        return {
+          hour: i,
+          label: `${i.toString().padStart(2, '0')}:00`,
+          sessions: hourData?.count || 0,
+          minutes: hourData?.totalMinutes || 0
+        };
+      });
+
+      const peakHour = peakHours.reduce((max, h) => h.sessions > max.sessions ? h : max, peakHours[0]);
+
+      // Total Stats in Period
+      const totalStats = await StudySession.aggregate([
+        { $match: periodMatch },
+        {
+          $group: {
+            _id: null,
+            totalSessions: { $sum: 1 },
+            totalMinutes: { $sum: '$duration' },
+            avgDuration: { $avg: '$duration' }
+          }
+        }
+      ]);
+
+      const totals = totalStats[0] || { totalSessions: 0, totalMinutes: 0, avgDuration: 0 };
+
+      return reply.send({
+        usageTrend,
+        peakHours,
+        peakHour: peakHour.label,
+        totalSessionsLast7Days: totals.totalSessions,
+        totalHoursLast7Days: Math.round(totals.totalMinutes / 60),
+        avgSessionDuration: Math.round(totals.avgDuration || 0)
       });
     }
 

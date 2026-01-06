@@ -91,9 +91,67 @@ const deleteOldNotifications = async (req, reply) => {
     }
 };
 
+/**
+ * Get admin notifications (blocked login attempts, etc.) - Admin only
+ */
+const getAdminNotifications = async (req, reply) => {
+    try {
+        const userId = req.user._id;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const type = req.query.type; // Optional filter by type
+
+        const query = { user: userId, isAdminNotification: true };
+        if (type) {
+            query.type = type;
+        }
+
+        const notifications = await Notification.find(query)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const total = await Notification.countDocuments(query);
+        const unreadCount = await Notification.countDocuments({ ...query, isRead: false });
+
+        reply.send({
+            notifications,
+            unreadCount,
+            pagination: {
+                page,
+                limit,
+                total,
+                pages: Math.ceil(total / limit)
+            }
+        });
+    } catch (error) {
+        reply.code(500).send({ message: error.message });
+    }
+};
+
+/**
+ * Get admin unread notification count - Admin only
+ */
+const getAdminUnreadCount = async (req, reply) => {
+    try {
+        const userId = req.user._id;
+        const unreadCount = await Notification.countDocuments({ 
+            user: userId, 
+            isAdminNotification: true,
+            isRead: false 
+        });
+        reply.send({ unreadCount });
+    } catch (error) {
+        reply.code(500).send({ message: error.message });
+    }
+};
+
 module.exports = {
     getNotifications,
     getUnreadCount,
     markAsRead,
-    deleteOldNotifications
+    deleteOldNotifications,
+    getAdminNotifications,
+    getAdminUnreadCount
 };

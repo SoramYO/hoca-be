@@ -1,5 +1,6 @@
 const adminController = require('../controllers/admin.controller');
 const adsController = require('../controllers/ads.controller');
+const notificationController = require('../controllers/notification.controller');
 const { protect, admin } = require('../middlewares/auth.middleware');
 
 const adminRoutes = async (fastify, options) => {
@@ -54,6 +55,10 @@ const adminRoutes = async (fastify, options) => {
 
   // Ad Views Analytics
   fastify.get('/ads/views', adsController.getAdViewStats);
+
+  // Admin Notifications (blocked login attempts, etc.)
+  fastify.get('/notifications', notificationController.getAdminNotifications);
+  fastify.get('/notifications/unread-count', notificationController.getAdminUnreadCount);
 };
 
 module.exports = adminRoutes;

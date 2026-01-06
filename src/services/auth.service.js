@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Notification = require('../models/Notification');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET, CLIENT_URL } = require('../config/env');
 const { OAuth2Client } = require('google-auth-library');
@@ -6,6 +7,37 @@ const { GOOGLE_CLIENT_ID } = require('../config/env');
 const client = new OAuth2Client(GOOGLE_CLIENT_ID);
 const crypto = require('crypto');
 const emailService = require('./email.service');
+
+// Helper to create admin notification for blocked login attempts
+const notifyAdminBlockedLogin = async (user) => {
+  try {
+    // Find all admin users
+    const admins = await User.find({ role: 'ADMIN' });
+    
+    // Create notification for each admin
+    const notifications = admins.map(admin => ({
+      user: admin._id,
+      type: 'BLOCKED_LOGIN_ATTEMPT',
+      title: 'Blocked User Login Attempt',
+      message: `Người dùng bị khóa "${user.displayName}" (${user.email}) đã cố gắng đăng nhập.`,
+      icon: 'block',
+      data: {
+        userId: user._id,
+        userEmail: user.email,
+        userName: user.displayName,
+        lockReason: user.lockReason || 'Vi phạm quy định cộng đồng',
+        attemptTime: new Date()
+      },
+      isAdminNotification: true
+    }));
+    
+    if (notifications.length > 0) {
+      await Notification.insertMany(notifications);
+    }
+  } catch (err) {
+    console.error('Failed to notify admins of blocked login attempt:', err);
+  }
+};
 
 const signToken = (id, role, subscriptionTier) => {
   return jwt.sign({ id, role, subscriptionTier }, JWT_SECRET, { expiresIn: '7d' });
@@ -35,11 +67,14 @@ const registerUser = async (userData) => {
 const loginUser = async ({ email, password }) => {
   // Check user
   const user = await User.findOne({ email }).select('+password');
-  if (user.isLocked) {
-    throw new Error('User is locked');
-  }
   if (!user) {
     throw new Error('Invalid credentials');
+  }
+  
+  if (user.isLocked || user.isBlocked) {
+    // Notify admins about blocked user login attempt
+    await notifyAdminBlockedLogin(user);
+    throw new Error('User is locked');
   }
 
   // Check password
@@ -211,6 +246,8 @@ const googleLogin = async (token) => {
   }
 
   if (user.isLocked || user.isBlocked) {
+    // Notify admins about blocked user login attempt
+    await notifyAdminBlockedLogin(user);
     throw new Error('User is locked');
   }
 
