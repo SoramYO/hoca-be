@@ -60,7 +60,9 @@ const toggleLockUser = async (req, reply) => {
       // Invalidate sessions - logic would go here (e.g. increase token version)
       user.resetPasswordToken = undefined; // Force re-auth eventually
     } else {
+      // When unlocking, reset all blocking states to ensure user can login
       user.lockReason = '';
+      user.isBlocked = false; // Also reset isBlocked to ensure user can login
     }
 
     await user.save();
