@@ -30,6 +30,7 @@ const buildApp = async () => {
     origin: (origin, cb) => {
       const allowedOrigins = [
         'http://localhost:3000',
+        'https://hoca.asia',
         CLIENT_URL
       ];
 
