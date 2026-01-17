@@ -32,7 +32,7 @@ services:
         sync: false
       - key: EMAIL_PASSWORD
         sync: false
-      - key: FRONTEND_URL
-        value: https://hoca.vercel.app
+      - key: CLIENT_URL
+        value: https://hoca.asia
     autoDeploy: true
 

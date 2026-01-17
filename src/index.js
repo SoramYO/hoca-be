@@ -20,6 +20,8 @@ const startServer = async () => {
     // 4. Setup Socket.io
     const allowedOrigins = [
       'http://localhost:3000',
+      'https://hoca.asia',
+      'https://www.hoca.asia',
       CLIENT_URL
     ].filter(Boolean);
 
