@@ -126,8 +126,8 @@ const forgotPassword = async (email) => {
 
   // Set expire (10 mins)
   user.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
-
-  await user.save();
+  
+  await user.save({ validateBeforeSave: false });
 
   // Create reset url
   // Note: Adjust CLIENT_URL in env or hardcode for now based on context
