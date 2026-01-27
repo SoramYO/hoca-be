@@ -61,6 +61,34 @@ const registerUser = async (userData) => {
 
   const token = signToken(user._id, user.role, user.subscriptionTier);
 
+  // Send welcome email (non-blocking)
+  try {
+    const axios = require('axios');
+    const { EMAIL_SERVICE_URL, EMAIL_SERVICE_API_KEY } = require('../config/env');
+
+    // Call welcome email microservice
+    const welcomeUrl = EMAIL_SERVICE_URL.replace('send-reset-email', 'send-welcome-email');
+
+    axios.post(
+      welcomeUrl,
+      {
+        email: user.email,
+        displayName: user.displayName,
+        apiKey: EMAIL_SERVICE_API_KEY
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000
+      }
+    ).catch(error => {
+      // Don't block registration if email fails
+      console.error('Failed to send welcome email:', error.message);
+    });
+  } catch (error) {
+    console.error('Welcome email error:', error.message);
+    // Continue with registration even if email fails
+  }
+
   return { user, token };
 };
 
@@ -241,15 +269,42 @@ const googleLogin = async (token) => {
     }
   } else {
     // Create new user
+    const isNewUser = true;
     user = await User.create({
       displayName: name,
       email,
       googleId,
       avatar: picture,
       // Random password for google users
-      // Random password for google users
       password: crypto.randomBytes(16).toString('hex')
     });
+
+    // Send welcome email for new Google users (non-blocking)
+    if (isNewUser) {
+      try {
+        const axios = require('axios');
+        const { EMAIL_SERVICE_URL, EMAIL_SERVICE_API_KEY } = require('../config/env');
+
+        const welcomeUrl = EMAIL_SERVICE_URL.replace('send-reset-email', 'send-welcome-email');
+
+        axios.post(
+          welcomeUrl,
+          {
+            email: user.email,
+            displayName: user.displayName,
+            apiKey: EMAIL_SERVICE_API_KEY
+          },
+          {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 10000
+          }
+        ).catch(error => {
+          console.error('Failed to send welcome email (Google):', error.message);
+        });
+      } catch (error) {
+        console.error('Welcome email error (Google):', error.message);
+      }
+    }
   }
 
   if (user.isLocked || user.isBlocked) {
