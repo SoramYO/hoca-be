@@ -32,6 +32,7 @@ const buildApp = async () => {
         'http://localhost:3000',
         'https://hoca.asia',
         'https://www.hoca.asia',
+        'https://hoca-six.vercel.app',
         CLIENT_URL
       ];
 
