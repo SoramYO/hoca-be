@@ -26,5 +26,8 @@ module.exports = {
   PAYOS_CLIENT_ID: process.env.PAYOS_CLIENT_ID,
   PAYOS_API_KEY: process.env.PAYOS_API_KEY,
   PAYOS_CHECKSUM_KEY: process.env.PAYOS_CHECKSUM_KEY,
+  // Email Microservice
+  EMAIL_SERVICE_URL: process.env.EMAIL_SERVICE_URL,
+  EMAIL_SERVICE_API_KEY: process.env.EMAIL_SERVICE_API_KEY,
 };
 

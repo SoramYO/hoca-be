@@ -13,7 +13,7 @@ const notifyAdminBlockedLogin = async (user) => {
   try {
     // Find all admin users
     const admins = await User.find({ role: 'ADMIN' });
-    
+
     // Create notification for each admin
     const notifications = admins.map(admin => ({
       user: admin._id,
@@ -30,7 +30,7 @@ const notifyAdminBlockedLogin = async (user) => {
       },
       isAdminNotification: true
     }));
-    
+
     if (notifications.length > 0) {
       await Notification.insertMany(notifications);
     }
@@ -70,7 +70,7 @@ const loginUser = async ({ email, password }) => {
   if (!user) {
     throw new Error('Invalid credentials');
   }
-  
+
   if (user.isLocked || user.isBlocked) {
     // Notify admins about blocked user login attempt
     await notifyAdminBlockedLogin(user);
@@ -124,37 +124,44 @@ const forgotPassword = async (email) => {
     .update(resetToken)
     .digest('hex');
 
-  // Set expire (10 mins)
-  user.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
-  
+  // Set expire (1 hour)
+  user.resetPasswordExpire = Date.now() + 60 * 60 * 1000;
+
   await user.save({ validateBeforeSave: false });
 
   // Create reset url
-  // Note: Adjust CLIENT_URL in env or hardcode for now based on context
   const baseUrl = CLIENT_URL.endsWith('/') ? CLIENT_URL.slice(0, -1) : CLIENT_URL;
   const resetUrl = `${baseUrl}/auth/reset-password/${resetToken}`;
 
-  const message = `
-    <h1>You have requested a password reset</h1>
-    <p>Please go to this link to reset your password:</p>
-    <a href="${resetUrl}" clicktracking=off>${resetUrl}</a>
-    <p>This link expires in 10 minutes.</p>
-  `;
-
   try {
-    await emailService.sendEmail({
-      to: user.email,
-      subject: 'Password Reset Request',
-      text: `Reset Password Link: ${resetUrl}`,
-      html: message
-    });
+    // Call email microservice (deployed on Vercel)
+    const axios = require('axios');
+    const { EMAIL_SERVICE_URL, EMAIL_SERVICE_API_KEY } = require('../config/env');
+
+    const response = await axios.post(
+      EMAIL_SERVICE_URL,
+      {
+        email: user.email,
+        resetLink: resetUrl,
+        apiKey: EMAIL_SERVICE_API_KEY
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000 // 10 seconds timeout
+      }
+    );
+
+    if (!response.data.success) {
+      throw new Error('Email service returned error');
+    }
 
     return true;
   } catch (error) {
+    console.error('Email microservice error:', error.message);
     user.resetPasswordToken = undefined;
     user.resetPasswordExpire = undefined;
     await user.save();
-    throw new Error('Email could not be sent');
+    throw new Error('Email could not be sent: ' + error.message);
   }
 };
 
