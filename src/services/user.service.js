@@ -517,6 +517,29 @@ const getWeeklyActivity = async (userId) => {
   return result;
 };
 
+/**
+ * Delete user account permanently
+ */
+const deleteAccount = async (userId) => {
+  const user = await User.findById(userId);
+  if (!user) throw new Error('User not found');
+
+  // Delete related data
+  const StudySession = require('../models/StudySession');
+  const Room = require('../models/Room');
+
+  // Delete user's study sessions
+  await StudySession.deleteMany({ user: userId });
+
+  // Delete user's rooms
+  await Room.deleteMany({ owner: userId });
+
+  // Delete the user
+  await User.findByIdAndDelete(userId);
+
+  return { message: 'Tài khoản đã được xóa thành công' };
+};
+
 module.exports = {
   createUser,
   authenticateUser,
@@ -528,5 +551,6 @@ module.exports = {
   getLeaderboard,
   recoverStreak,
   updateVirtualBackground,
-  getWeeklyActivity
+  getWeeklyActivity,
+  deleteAccount
 };
