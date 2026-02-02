@@ -9,13 +9,49 @@ const register = async (req, reply) => {
       return reply.code(400).send({ message: 'Missing required fields' });
     }
 
-    const { user, token } = await authService.registerUser({ displayName, email, password });
+    const result = await authService.registerUser({ displayName, email, password });
 
     reply.code(201).send({
-      message: 'User registered successfully',
+      message: result.message,
+      user: result.user,
+      requiresVerification: true
+    });
+  } catch (error) {
+    reply.code(400).send({ message: error.message });
+  }
+};
+
+const verifyOtp = async (req, reply) => {
+  try {
+    const { email, code } = req.body;
+
+    if (!email || !code) {
+      return reply.code(400).send({ message: 'Email and verification code are required' });
+    }
+
+    const { user, token } = await authService.verifyOtp(email, code);
+
+    reply.send({
+      message: 'Email verified successfully. Welcome to HOCA!',
       user,
       token
     });
+  } catch (error) {
+    reply.code(400).send({ message: error.message });
+  }
+};
+
+const resendOtp = async (req, reply) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return reply.code(400).send({ message: 'Email is required' });
+    }
+
+    const result = await authService.resendOtp(email);
+
+    reply.send(result);
   } catch (error) {
     reply.code(400).send({ message: error.message });
   }
@@ -118,5 +154,7 @@ module.exports = {
   changePassword,
   forgotPassword,
   resetPassword,
-  googleLogin
+  googleLogin,
+  verifyOtp,
+  resendOtp
 };

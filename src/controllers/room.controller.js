@@ -175,6 +175,102 @@ const getCategories = async (req, reply) => {
   }
 };
 
+/**
+ * Check if user can use microphone in a room
+ * Returns mic permission status based on room type and user tier
+ */
+const checkMicPermission = async (req, reply) => {
+  try {
+    const Room = require('../models/Room');
+    const User = require('../models/User');
+
+    const room = await Room.findById(req.params.id);
+    if (!room) {
+      return reply.code(404).send({
+        canUseMic: false,
+        message: 'Room not found'
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return reply.code(404).send({
+        canUseMic: false,
+        message: 'User not found'
+      });
+    }
+
+    const permission = subscriptionService.checkMicPermission(user, room);
+
+    reply.send({
+      canUseMic: permission.canUseMic,
+      reason: permission.reason,
+      showUpgrade: permission.showUpgrade || false,
+      hideMicIcon: permission.hideMicIcon || false,
+      roomType: room.roomType,
+      userTier: subscriptionService.getEffectiveTier(user)
+    });
+  } catch (error) {
+    reply.code(500).send({ canUseMic: false, message: error.message });
+  }
+};
+
+/**
+ * Get available room types for creation based on user tier
+ */
+const getAvailableRoomTypes = async (req, reply) => {
+  try {
+    const User = require('../models/User');
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return reply.code(404).send({ message: 'User not found' });
+    }
+
+    const tier = subscriptionService.getEffectiveTier(user);
+    const isAdmin = user.role === 'ADMIN';
+
+    // FREE users can only create SILENT rooms
+    // HOCA+ and ADMIN can create both
+    const availableTypes = [];
+
+    availableTypes.push({
+      type: 'SILENT',
+      name: 'Phòng Im lặng',
+      description: 'Không ai được dùng mic. Tập trung học tập tuyệt đối.',
+      icon: '🔇',
+      available: true
+    });
+
+    if (tier !== 'FREE' || isAdmin) {
+      availableTypes.push({
+        type: 'DISCUSSION',
+        name: 'Phòng Thảo luận',
+        description: 'HOCA+ có thể dùng mic để thảo luận.',
+        icon: '🎤',
+        available: true
+      });
+    } else {
+      availableTypes.push({
+        type: 'DISCUSSION',
+        name: 'Phòng Thảo luận',
+        description: 'Nâng cấp HOCA+ để tạo phòng có mic!',
+        icon: '🔒',
+        available: false,
+        requiresUpgrade: true
+      });
+    }
+
+    reply.send({
+      tier,
+      isAdmin,
+      roomTypes: availableTypes
+    });
+  } catch (error) {
+    reply.code(500).send({ message: error.message });
+  }
+};
+
 module.exports = {
   createRoom,
   getRooms,
@@ -184,7 +280,8 @@ module.exports = {
   closeRoom,
   checkJoinEligibility,
   checkCreateEligibility,
+  checkMicPermission,
+  getAvailableRoomTypes,
   getCategories,
   getMyRooms
 };
-

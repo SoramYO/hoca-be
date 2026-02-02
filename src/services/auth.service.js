@@ -52,28 +52,37 @@ const registerUser = async (userData) => {
     throw new Error('User already exists');
   }
 
-  // Create user
+  // Generate 6-digit OTP
+  const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+  const verificationCodeExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+
+  // Create user with INACTIVE status
   const user = await User.create({
     displayName,
     email,
-    password
+    password,
+    accountStatus: 'INACTIVE',
+    verificationCode,
+    verificationCodeExpires
   });
 
-  const token = signToken(user._id, user.role, user.subscriptionTier);
-
-  // Send welcome email (non-blocking)
+  // Send verification OTP email (non-blocking)
   try {
     const axios = require('axios');
-    const { EMAIL_SERVICE_URL, EMAIL_SERVICE_API_KEY } = require('../config/env');
+    const { EMAIL_SERVICE_URL, EMAIL_SERVICE_API_KEY, CLIENT_URL } = require('../config/env');
 
-    // Call welcome email microservice
-    const welcomeUrl = EMAIL_SERVICE_URL.replace('send-reset-email', 'send-welcome-email');
+    // Verification link
+    const verifyLink = `${CLIENT_URL}/auth/verify?email=${encodeURIComponent(email)}&code=${verificationCode}`;
+
+    const verifyEmailUrl = EMAIL_SERVICE_URL.replace('send-reset-email', 'send-verify-email');
 
     axios.post(
-      welcomeUrl,
+      verifyEmailUrl,
       {
         email: user.email,
         displayName: user.displayName,
+        verificationCode,
+        verifyLink,
         apiKey: EMAIL_SERVICE_API_KEY
       },
       {
@@ -81,15 +90,22 @@ const registerUser = async (userData) => {
         timeout: 10000
       }
     ).catch(error => {
-      // Don't block registration if email fails
-      console.error('Failed to send welcome email:', error.message);
+      console.error('Failed to send verification email:', error.message);
     });
   } catch (error) {
-    console.error('Welcome email error:', error.message);
-    // Continue with registration even if email fails
+    console.error('Verification email error:', error.message);
   }
 
-  return { user, token };
+  // Return user info but NO token (must verify first)
+  return {
+    user: {
+      id: user._id,
+      email: user.email,
+      displayName: user.displayName,
+      accountStatus: user.accountStatus
+    },
+    message: 'Please check your email for verification code. Code expires in 5 minutes.'
+  };
 };
 
 const loginUser = async ({ email, password }) => {
@@ -97,6 +113,11 @@ const loginUser = async ({ email, password }) => {
   const user = await User.findOne({ email }).select('+password');
   if (!user) {
     throw new Error('Invalid credentials');
+  }
+
+  // Check if account is verified
+  if (user.accountStatus === 'INACTIVE') {
+    throw new Error('Please verify your email before logging in. Check your inbox for the verification code.');
   }
 
   if (user.isLocked || user.isBlocked) {
@@ -317,11 +338,125 @@ const googleLogin = async (token) => {
   return { user, token: tokenJWT };
 };
 
+/**
+ * Verify OTP code and activate account
+ */
+const verifyOtp = async (email, code) => {
+  const user = await User.findOne({ email }).select('+verificationCode +verificationCodeExpires');
+
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  if (user.accountStatus === 'ACTIVE') {
+    throw new Error('Account is already verified');
+  }
+
+  // Check if code matches and not expired
+  if (user.verificationCode !== code) {
+    throw new Error('Invalid verification code');
+  }
+
+  if (new Date() > user.verificationCodeExpires) {
+    throw new Error('Verification code has expired. Please request a new one.');
+  }
+
+  // Activate account
+  user.accountStatus = 'ACTIVE';
+  user.verificationCode = undefined;
+  user.verificationCodeExpires = undefined;
+  await user.save();
+
+  // Generate token for auto-login
+  const token = signToken(user._id, user.role, user.subscriptionTier);
+
+  // Send welcome email after successful verification
+  try {
+    const axios = require('axios');
+    const { EMAIL_SERVICE_URL, EMAIL_SERVICE_API_KEY } = require('../config/env');
+
+    const welcomeUrl = EMAIL_SERVICE_URL.replace('send-reset-email', 'send-welcome-email');
+
+    axios.post(
+      welcomeUrl,
+      {
+        email: user.email,
+        displayName: user.displayName,
+        apiKey: EMAIL_SERVICE_API_KEY
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000
+      }
+    ).catch(error => {
+      console.error('Failed to send welcome email:', error.message);
+    });
+  } catch (error) {
+    console.error('Welcome email error:', error.message);
+  }
+
+  return { user, token };
+};
+
+/**
+ * Resend verification OTP
+ */
+const resendOtp = async (email) => {
+  const user = await User.findOne({ email });
+
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  if (user.accountStatus === 'ACTIVE') {
+    throw new Error('Account is already verified');
+  }
+
+  // Generate new 6-digit OTP
+  const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+  const verificationCodeExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+
+  user.verificationCode = verificationCode;
+  user.verificationCodeExpires = verificationCodeExpires;
+  await user.save();
+
+  // Send verification email
+  try {
+    const axios = require('axios');
+    const { EMAIL_SERVICE_URL, EMAIL_SERVICE_API_KEY, CLIENT_URL } = require('../config/env');
+
+    const verifyLink = `${CLIENT_URL}/auth/verify?email=${encodeURIComponent(email)}&code=${verificationCode}`;
+    const verifyEmailUrl = EMAIL_SERVICE_URL.replace('send-reset-email', 'send-verify-email');
+
+    await axios.post(
+      verifyEmailUrl,
+      {
+        email: user.email,
+        displayName: user.displayName,
+        verificationCode,
+        verifyLink,
+        apiKey: EMAIL_SERVICE_API_KEY
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000
+      }
+    );
+
+    return { message: 'Verification code sent. Check your email.' };
+  } catch (error) {
+    console.error('Resend verification email error:', error.message);
+    throw new Error('Failed to send verification email. Please try again.');
+  }
+};
+
 module.exports = {
   registerUser,
   loginUser,
   changePassword,
   forgotPassword,
   resetPassword,
-  googleLogin
+  googleLogin,
+  verifyOtp,
+  resendOtp
 };

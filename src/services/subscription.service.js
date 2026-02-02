@@ -61,6 +61,10 @@ const FEATURE_ACCESS = {
     // Room limits
     unlimited_rooms: ['YEARLY', 'LIFETIME'],
 
+    // Mic & Discussion Room features (HOCA+)
+    use_mic: ['MONTHLY', 'YEARLY', 'LIFETIME'],
+    create_discussion_room: ['MONTHLY', 'YEARLY', 'LIFETIME'],
+
     // Premium perks
     no_ads: ['MONTHLY', 'YEARLY', 'LIFETIME'],
     early_access: ['LIFETIME'],
@@ -223,14 +227,23 @@ const isSameDay = (date1, date2) => {
 /**
  * Check if FREE user can create a new room
  * @param {Object} user - User document
+ * @param {string} roomType - 'SILENT' or 'DISCUSSION'
  * @returns {{ canCreate: boolean, reason?: string }}
  */
-const checkRoomCreationEligibility = (user) => {
+const checkRoomCreationEligibility = (user, roomType = 'SILENT') => {
     if (!user) return { canCreate: false, reason: 'User not found' };
     if (user.role === 'ADMIN') return { canCreate: true };
 
     const tier = getEffectiveTier(user);
     const limits = getTierLimits(tier);
+
+    // Check if user can create DISCUSSION rooms (HOCA+ only)
+    if (roomType === 'DISCUSSION' && tier === 'FREE') {
+        return {
+            canCreate: false,
+            reason: 'Chỉ thành viên HOCA+ mới được tạo phòng thảo luận (có mic). Nâng cấp ngay để mở khóa tính năng này!'
+        };
+    }
 
     const now = new Date();
     const isNewDay = !isSameDay(user.lastRoomCreatedDate, now);
@@ -260,6 +273,47 @@ const checkRoomCreationEligibility = (user) => {
     }
 
     return { canCreate: true };
+};
+
+/**
+ * Check if user can use microphone in a room
+ * @param {Object} user - User document
+ * @param {Object} room - Room document
+ * @returns {{ canUseMic: boolean, reason?: string, showUpgrade?: boolean }}
+ */
+const checkMicPermission = (user, room) => {
+    if (!user) return { canUseMic: false, reason: 'User not found' };
+    if (!room) return { canUseMic: false, reason: 'Room not found' };
+
+    // SILENT rooms - NO ONE can use mic
+    if (room.roomType === 'SILENT') {
+        return {
+            canUseMic: false,
+            reason: 'Đây là phòng học im lặng. Mic bị tắt để giữ không gian tập trung.',
+            showUpgrade: false,
+            hideMicIcon: true
+        };
+    }
+
+    // DISCUSSION rooms - Check user tier
+    if (user.role === 'ADMIN') {
+        return { canUseMic: true };
+    }
+
+    const tier = getEffectiveTier(user);
+
+    // HOCA+ users can use mic in DISCUSSION rooms
+    if (tier !== 'FREE') {
+        return { canUseMic: true };
+    }
+
+    // FREE users cannot use mic in DISCUSSION rooms
+    return {
+        canUseMic: false,
+        reason: 'Tính năng này chỉ dành cho thành viên HOCA+. Nâng cấp ngay để thảo luận!',
+        showUpgrade: true,
+        hideMicIcon: false
+    };
 };
 
 /**
@@ -418,6 +472,8 @@ module.exports = {
     getRoomDurationLimit,
     requiresSequentialRooms,
     checkRoomCreationEligibility,
+    // Mic permission (HOCA+)
+    checkMicPermission,
     // Join room functions
     checkJoinRoomEligibility,
     getDailyStudyTimeStatus,

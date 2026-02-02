@@ -11,6 +11,16 @@ const roomSchema = new mongoose.Schema({
 
   // Settings
   maxParticipants: { type: Number, default: 30 },
+
+  // Room Type for Mic Control
+  // SILENT: No one can use mic (absolute silence)
+  // DISCUSSION: HOCA+ can use mic, FREE users can only listen
+  roomType: {
+    type: String,
+    enum: ['SILENT', 'DISCUSSION'],
+    default: 'SILENT'
+  },
+
   timerMode: {
     type: String,
     enum: ['POMODORO_25_5', 'POMODORO_45_5', 'POMODORO_50_10', 'COUNT_UP'],

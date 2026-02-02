@@ -74,6 +74,7 @@ const buildApp = async () => {
   app.register(require('./routes/upload.routes'), { prefix: '/api/upload' });
   app.register(require('./routes/rank.routes'), { prefix: '/api/ranks' });
   app.register(require('./routes/notification.routes'), { prefix: '/api/notifications' });
+  app.register(require('./routes/cron.routes'), { prefix: '/api/cron' });
 
 
   return app;

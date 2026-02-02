@@ -76,6 +76,15 @@ const userSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
   }],
 
+  // Email Verification (OTP Anti-Spam)
+  accountStatus: {
+    type: String,
+    enum: ['ACTIVE', 'INACTIVE'],
+    default: 'INACTIVE'
+  },
+  verificationCode: { type: String, select: false },
+  verificationCodeExpires: { type: Date, select: false },
+
   // Auth Recovery
   resetPasswordToken: { type: String, select: false },
   resetPasswordExpire: { type: Date, select: false }

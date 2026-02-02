@@ -53,6 +53,10 @@ const startServer = async () => {
     setIoInstance(io);
     initJobs();
 
+    // 6. Init Cleanup Job (delete unverified accounts after 24h)
+    const { startCleanupJob } = require('./jobs/cleanup.job');
+    startCleanupJob();
+
     global.io = io;
 
 

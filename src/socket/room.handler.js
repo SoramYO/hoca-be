@@ -192,7 +192,14 @@ const registerRoomHandlers = (io, socket) => {
 
       // Send room info to the joining user (includes owner for close button)
       const room = await Room.findById(roomId).populate('owner', '_id displayName');
+      const user = await User.findById(userId);
+
       if (room) {
+        // Check mic permission for this user in this room
+        const micPermission = user
+          ? subscriptionService.checkMicPermission(user, room)
+          : { canUseMic: false, hideMicIcon: true };
+
         socket.emit('room-info', {
           roomId: room._id,
           name: room.name,
@@ -200,7 +207,15 @@ const registerRoomHandlers = (io, socket) => {
           ownerName: room.owner?.displayName,
           maxParticipants: room.maxParticipants,
           isPublic: room.isPublic,
-          timerMode: room.timerMode
+          timerMode: room.timerMode,
+          // NEW: Room type and mic permission info
+          roomType: room.roomType,
+          micPermission: {
+            canUseMic: micPermission.canUseMic,
+            hideMicIcon: micPermission.hideMicIcon || false,
+            showUpgrade: micPermission.showUpgrade || false,
+            reason: micPermission.reason
+          }
         });
       }
 
@@ -227,13 +242,13 @@ const registerRoomHandlers = (io, socket) => {
         socket.emit('timer-sync', { status, startTime, duration, mode, serverTime: Date.now() });
       } else {
         // Auto-start timer for the room with default mode
-        const room = await Room.findById(roomId);
-        const mode = room?.timerMode || 'POMODORO_25_5';
+        const roomForTimer = await Room.findById(roomId);
+        const mode = roomForTimer?.timerMode || 'POMODORO_25_5';
         runTimerPhase(roomId, 'FOCUS', mode);
         console.log(`Auto-started timer for room ${roomId} with mode ${mode}`);
       }
 
-      console.log(`User ${userId} (${tier}) joined room ${roomId}`);
+      console.log(`User ${userId} (${tier}) joined room ${roomId}, roomType: ${room?.roomType}`);
     } catch (error) {
       socket.emit('error', { message: error.message });
     }
@@ -377,13 +392,87 @@ const registerRoomHandlers = (io, socket) => {
   });
 
   // Media State Broadcast (camera/mic on/off)
-  socket.on('media-state-update', ({ roomId, isCameraOn, isMicOn }) => {
-    socket.to(roomId).emit('media-state-update', {
-      socketId: socket.id,
-      userId: socket.user.id,
-      isCameraOn,
-      isMicOn
-    });
+  // Includes mic permission check for HOCA+ feature
+  socket.on('media-state-update', async ({ roomId, isCameraOn, isMicOn }) => {
+    try {
+      // If user is trying to turn on mic, check permission
+      if (isMicOn) {
+        const room = await Room.findById(roomId);
+        const user = await User.findById(userId);
+
+        if (room && user) {
+          const permission = subscriptionService.checkMicPermission(user, room);
+
+          if (!permission.canUseMic) {
+            // Block mic activation and notify user
+            socket.emit('mic-blocked', {
+              message: permission.reason,
+              showUpgrade: permission.showUpgrade || false,
+              roomType: room.roomType
+            });
+
+            // Don't broadcast mic-on to others
+            socket.to(roomId).emit('media-state-update', {
+              socketId: socket.id,
+              userId: socket.user.id,
+              isCameraOn,
+              isMicOn: false // Force mic off in broadcast
+            });
+            return;
+          }
+        }
+      }
+
+      // Permission granted or mic is being turned off - broadcast normally
+      socket.to(roomId).emit('media-state-update', {
+        socketId: socket.id,
+        userId: socket.user.id,
+        isCameraOn,
+        isMicOn
+      });
+    } catch (error) {
+      console.error('Error in media-state-update:', error);
+      // Fallback: allow broadcast but log error
+      socket.to(roomId).emit('media-state-update', {
+        socketId: socket.id,
+        userId: socket.user.id,
+        isCameraOn,
+        isMicOn
+      });
+    }
+  });
+
+  // Request mic permission - client can call this to check before enabling mic
+  socket.on('request-mic-permission', async ({ roomId }) => {
+    try {
+      const room = await Room.findById(roomId);
+      const user = await User.findById(userId);
+
+      if (!room || !user) {
+        socket.emit('mic-permission-result', {
+          canUseMic: false,
+          reason: 'Room or user not found'
+        });
+        return;
+      }
+
+      const permission = subscriptionService.checkMicPermission(user, room);
+      const tier = subscriptionService.getEffectiveTier(user);
+
+      socket.emit('mic-permission-result', {
+        canUseMic: permission.canUseMic,
+        reason: permission.reason,
+        showUpgrade: permission.showUpgrade || false,
+        hideMicIcon: permission.hideMicIcon || false,
+        roomType: room.roomType,
+        userTier: tier
+      });
+    } catch (error) {
+      socket.emit('mic-permission-result', {
+        canUseMic: false,
+        reason: 'Error checking permission'
+      });
+    }
   });
 };
 

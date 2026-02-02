@@ -39,14 +39,22 @@ const createRoom = async (userId, roomData) => {
   // Reset daily stats if new day
   await resetDailyStatsIfNeeded(user);
 
-  // Check room creation eligibility using subscription service
-  const eligibility = subscriptionService.checkRoomCreationEligibility(user);
+  // Determine room type (default SILENT, only HOCA+ can create DISCUSSION)
+  let roomType = roomData.roomType || 'SILENT';
+
+  // Check room creation eligibility (includes roomType validation)
+  const eligibility = subscriptionService.checkRoomCreationEligibility(user, roomType);
   if (!eligibility.canCreate) {
     throw new Error(eligibility.reason);
   }
 
   const tier = subscriptionService.getEffectiveTier(user);
   const tierLimits = subscriptionService.getTierLimits(tier);
+
+  // Force SILENT for FREE users (safety check)
+  if (tier === 'FREE' && roomType === 'DISCUSSION') {
+    roomType = 'SILENT';
+  }
 
   // Respect user's maxParticipants selection, but cap it at the tier's limit
   const tierMaxParticipants = tier === 'FREE' ? 30 : 999;
@@ -61,6 +69,7 @@ const createRoom = async (userId, roomData) => {
 
   const room = await Room.create({
     ...roomData,
+    roomType,
     maxParticipants,
     owner: userId,
     isActive: true,
@@ -79,7 +88,7 @@ const createRoom = async (userId, roomData) => {
 
   await user.save();
 
-  console.log(`Room created by ${user.displayName} (${tier}): ${room._id}, autoCloseAt: ${autoCloseAt}`);
+  console.log(`Room created by ${user.displayName} (${tier}): ${room._id}, type: ${roomType}, autoCloseAt: ${autoCloseAt}`);
 
   return room;
 };
