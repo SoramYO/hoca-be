@@ -3,6 +3,7 @@ const Room = require('../models/Room');
 const RoomCategory = require('../models/RoomCategory');
 const Transaction = require('../models/Transaction');
 const SystemConfig = require('../models/SystemConfig');
+const Report = require('../models/Report');
 const moment = require('moment');
 
 // User Management
@@ -164,11 +165,15 @@ const getAllRooms = async (req, reply) => {
     const total = await Room.countDocuments(query);
 
     // Enhance with "mock" report data/flags as requested by UI
-    const enhancedRooms = rooms.map(room => ({
-      ...room.toObject(),
-      reportCount: Math.floor(Math.random() * 5), // Mock
-      isNSFW: Math.random() > 0.9, // Mock
-      isTrending: room.activeParticipants.length > 10
+    // Enhance with REAL report data
+    const enhancedRooms = await Promise.all(rooms.map(async (room) => {
+      const reportCount = await Report.countDocuments({ room: room._id, status: 'PENDING' });
+      return {
+        ...room.toObject(),
+        reportCount, // Real count
+        isNSFW: reportCount > 5, // Simple logic: high reports = potential NSFW/Risk
+        isTrending: room.activeParticipants.length > 10
+      };
     }));
 
     reply.send({ rooms: enhancedRooms, total, page });
