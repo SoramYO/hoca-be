@@ -110,14 +110,23 @@ const registerUser = async (userData) => {
 
 const loginUser = async ({ email, password }) => {
   // Check user
-  const user = await User.findOne({ email }).select('+password');
+  // Also select verificationCode to check for legacy users
+  const user = await User.findOne({ email }).select('+password +verificationCode');
   if (!user) {
     throw new Error('Invalid credentials');
   }
 
   // Check if account is verified
   if (user.accountStatus === 'INACTIVE') {
-    throw new Error('Please verify your email before logging in. Check your inbox for the verification code.');
+    // HOTFIX: Check if this is a legacy user (created before verification feature)
+    // Legacy users default to INACTIVE but have no verificationCode
+    if (!user.verificationCode) {
+      // Auto-activate legacy user
+      user.accountStatus = 'ACTIVE';
+      await user.save({ validateBeforeSave: false });
+    } else {
+      throw new Error('Please verify your email before logging in. Check your inbox for the verification code.');
+    }
   }
 
   if (user.isLocked || user.isBlocked) {
