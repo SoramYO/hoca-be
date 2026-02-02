@@ -15,6 +15,7 @@ require('./models/SystemConfig');
 require('./models/Message');
 require('./models/Rank');
 require('./models/Notification');
+require('./models/AIUsage'); // NEW: AI Usage tracking
 const logger = require('./middlewares/logger.middleware');
 const buildApp = async () => {
   const app = fastify();
@@ -75,6 +76,7 @@ const buildApp = async () => {
   app.register(require('./routes/rank.routes'), { prefix: '/api/ranks' });
   app.register(require('./routes/notification.routes'), { prefix: '/api/notifications' });
   app.register(require('./routes/cron.routes'), { prefix: '/api/cron' });
+  app.register(require('./routes/ai.routes'), { prefix: '/api/ai' }); // NEW: AI Study Assistant
 
 
   return app;
