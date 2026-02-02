@@ -1,8 +1,10 @@
 const Room = require('../models/Room');
 const User = require('../models/User');
+const Message = require('../models/Message');
 const { joinRoom, leaveRoom } = require('../services/room.service');
 const subscriptionService = require('../services/subscription.service');
 const { checkAndUnlockBadges } = require('../services/badge.service');
+const aiService = require('../services/ai.service');
 
 
 // Timer State Management
@@ -398,7 +400,7 @@ const registerRoomHandlers = (io, socket) => {
 
       // Populate sender for consistency if needed, but we have user info in socket
       // Just broadcasting needed fields is faster
-      
+
       io.to(roomId).emit('chat-message', {
         _id: savedMessage._id,
         userId,
@@ -411,6 +413,48 @@ const registerRoomHandlers = (io, socket) => {
         mentions,
         timestamp: savedMessage.createdAt
       });
+
+      // AI Bot Auto-Reply Logic
+      if ((mentions && mentions.includes('HOCA_AI_BOT')) ||
+        (msgContent && msgContent.toLowerCase().includes('@hoca ai'))) {
+
+        io.to(roomId).emit('ai-thinking', { isThinking: true });
+
+        (async () => {
+          try {
+            const question = msgContent.replace(/@HOCA AI/gi, '').trim();
+            if (!question) return;
+
+            const aiResult = await aiService.askAI(question, socket.user, []);
+
+            io.to(roomId).emit('chat-message', {
+              _id: 'ai_' + Date.now(),
+              userId: 'HOCA_AI_BOT',
+              displayName: 'HOCA AI',
+              avatar: '/ai-mascot.png', // Uses the mascot image
+              message: aiResult.response,
+              content: aiResult.response,
+              type: 'TEXT',
+              timestamp: new Date().toISOString()
+            });
+          } catch (aiErr) {
+            const isLimitError = aiErr.message.includes('hết lượt') || aiErr.message.includes('Nâng cấp');
+            if (isLimitError) {
+              socket.emit('chat-message', {
+                userId: 'HOCA_AI_BOT',
+                displayName: 'HOCA AI',
+                message: `😿 ${aiErr.message}`,
+                content: `😿 ${aiErr.message}`,
+                type: 'SYSTEM',
+                timestamp: new Date().toISOString()
+              });
+            }
+            console.error('AI Bot Error:', aiErr.message);
+          } finally {
+            io.to(roomId).emit('ai-thinking', { isThinking: false });
+          }
+        })();
+      }
     } catch (error) {
       console.error('Chat persistence error:', error);
       // Still emit even if save fails? Maybe better to warn.
