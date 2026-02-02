@@ -77,6 +77,7 @@ const buildApp = async () => {
   app.register(require('./routes/notification.routes'), { prefix: '/api/notifications' });
   app.register(require('./routes/cron.routes'), { prefix: '/api/cron' });
   app.register(require('./routes/ai.routes'), { prefix: '/api/ai' }); // NEW: AI Study Assistant
+  app.register(require('./routes/sticker.routes'), { prefix: '/api/stickers' });
 
 
   return app;

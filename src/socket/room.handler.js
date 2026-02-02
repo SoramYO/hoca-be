@@ -372,7 +372,7 @@ const registerRoomHandlers = (io, socket) => {
     });
   });
 
-  socket.on('chat-message', ({ roomId, message }) => {
+  socket.on('chat-message', async ({ roomId, message, content, type = 'TEXT', stickerId, mentions = [] }) => {
     // Chat only for MONTHLY, YEARLY, LIFETIME or ADMIN
     const tier = socket.user.subscriptionTier || 'FREE';
     const canChat = tier !== 'FREE' || socket.user.role === 'ADMIN';
@@ -383,12 +383,39 @@ const registerRoomHandlers = (io, socket) => {
     }
 
     const displayName = socket.user.displayName || 'User';
-    io.to(roomId).emit('chat-message', {
-      userId,
-      displayName,
-      message,
-      timestamp: new Date().toISOString()
-    });
+    const msgContent = content || message; // Fallback
+
+    try {
+      // Save to DB for history
+      const savedMessage = await Message.create({
+        room: roomId,
+        sender: userId,
+        content: msgContent,
+        type,
+        stickerId,
+        mentions
+      });
+
+      // Populate sender for consistency if needed, but we have user info in socket
+      // Just broadcasting needed fields is faster
+      
+      io.to(roomId).emit('chat-message', {
+        _id: savedMessage._id,
+        userId,
+        displayName,
+        avatar: socket.user.avatar,
+        message: msgContent, // Maintain 'message' field for frontend compatibility
+        content: msgContent,
+        type,
+        stickerId,
+        mentions,
+        timestamp: savedMessage.createdAt
+      });
+    } catch (error) {
+      console.error('Chat persistence error:', error);
+      // Still emit even if save fails? Maybe better to warn.
+      socket.emit('error', { message: 'Failed to send message' });
+    }
   });
 
   // Media State Broadcast (camera/mic on/off)

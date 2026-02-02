@@ -4,25 +4,37 @@ const User = require('../models/User');
 const sendMessage = async (req, reply) => {
     try {
         const { roomId } = req.params;
-        const { content } = req.body;
+        const { content, type = 'TEXT', mentions = [], stickerId } = req.body;
         const userId = req.user.id;
 
-        // Check if user is Premium
+        // Check if user is Premium (or Admin)
         const user = await User.findById(userId);
-        console.log(user);
-        if (!user.isPremium) {
-            return reply.code(403).send({ message: 'Tính năng chat chỉ dành cho người dùng Pro. Nâng cấp ngay gói Pro!' });
+        const isAdmin = user.role === 'ADMIN';
+
+        // Allow if Premium or Admin
+        if (!user.isPremium && !isAdmin) {
+            return reply.code(403).send({ message: 'Tính năng chat chỉ dành cho HOCA+ Tháng trở lên. Nâng cấp ngay!' });
         }
 
-        if (!content || content.trim().length === 0) {
+        // Validate content (required for TEXT/IMAGE, optional for STICKER if stickerId present)
+        if (type === 'TEXT' && (!content || content.trim().length === 0)) {
             return reply.code(400).send({ message: 'Message content is required' });
         }
 
-        const message = await Message.create({
+        if (type === 'STICKER' && !stickerId) {
+            return reply.code(400).send({ message: 'Sticker ID is required' });
+        }
+
+        const messageData = {
             room: roomId,
             sender: userId,
-            content: content.trim()
-        });
+            content: content ? content.trim() : (type === 'STICKER' ? '[Sticker]' : ''),
+            type,
+            mentions,
+            stickerId
+        };
+
+        const message = await Message.create(messageData);
 
         // Populate sender info
         await message.populate('sender', 'displayName avatar');
