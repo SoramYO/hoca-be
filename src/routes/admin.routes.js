@@ -1,6 +1,7 @@
 const adminController = require('../controllers/admin.controller');
 const adsController = require('../controllers/ads.controller');
 const notificationController = require('../controllers/notification.controller');
+const feedbackController = require('../controllers/feedback.controller');
 const { protect, admin } = require('../middlewares/auth.middleware');
 
 const adminRoutes = async (fastify, options) => {
@@ -41,6 +42,10 @@ const adminRoutes = async (fastify, options) => {
 
   // Analytics
   fastify.get('/analytics', adminController.getAnalytics);
+
+  // Feedback
+  fastify.get('/feedback', feedbackController.getAllFeedback);
+  fastify.get('/feedback/summary', feedbackController.getFeedbackSummary);
 
   // Ads Management (Admin only)
   fastify.get('/ads/config', adsController.getAdConfig);

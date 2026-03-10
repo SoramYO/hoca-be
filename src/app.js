@@ -16,6 +16,7 @@ require('./models/Message');
 require('./models/Rank');
 require('./models/Notification');
 require('./models/AIUsage'); // NEW: AI Usage tracking
+require('./models/Feedback');
 const logger = require('./middlewares/logger.middleware');
 const buildApp = async () => {
   const app = fastify();
@@ -64,6 +65,7 @@ const buildApp = async () => {
   app.register(require('./routes/auth.routes'), { prefix: '/api/auth' });
   app.register(require('./routes/user.routes'), { prefix: '/api/users' });
   app.register(require('./routes/room.routes'), { prefix: '/api/rooms' });
+  app.register(require('./routes/feedback.routes'), { prefix: '/api/feedback' });
   app.register(require('./routes/payment.routes'), { prefix: '/api/payment' });
   app.register(require('./routes/pricing.routes'), { prefix: '/api/pricing' });
   app.register(require('./routes/report.routes'), { prefix: '/api/reports' });
