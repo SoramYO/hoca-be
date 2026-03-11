@@ -85,6 +85,10 @@ async function checkAILimit(user) {
  * @returns {Object} AI availability status
  */
 async function getAIStatus(user) {
+    if (!user || !user._id) {
+        throw new Error('User is required to get AI status');
+    }
+    
     const limitInfo = await checkAILimit(user);
 
     return {

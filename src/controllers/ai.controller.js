@@ -11,11 +11,14 @@ const aiService = require('../services/ai.service');
  */
 const getStatus = async (request, reply) => {
     try {
+        if (!request.user) {
+            return reply.status(401).send({ message: 'Unauthorized' });
+        }
         const status = await aiService.getAIStatus(request.user);
         return reply.send(status);
     } catch (error) {
-        console.error('AI status error:', error);
-        return reply.status(500).send({ message: 'Failed to get AI status' });
+        console.error('AI status error:', error.message, error.stack);
+        return reply.status(500).send({ message: 'Failed to get AI status', error: error.message });
     }
 };
 
