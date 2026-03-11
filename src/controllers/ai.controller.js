@@ -37,6 +37,19 @@ const streamChat = async (request, reply) => {
     }
 
     // Set up SSE headers
+    const origin = request.headers.origin;
+    const allowedOrigins = [
+        'http://localhost:3000',
+        'https://hoca.asia',
+        'https://www.hoca.asia',
+        'https://hoca-six.vercel.app'
+    ];
+    
+    if (origin && allowedOrigins.includes(origin)) {
+        reply.raw.setHeader('Access-Control-Allow-Origin', origin);
+        reply.raw.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+    
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
     reply.raw.setHeader('Connection', 'keep-alive');
